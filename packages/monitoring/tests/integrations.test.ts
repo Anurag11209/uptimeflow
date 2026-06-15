@@ -24,6 +24,7 @@ describe("integration dispatcher", () => {
     const prisma = {
       slackIntegration: { findMany: async () => [{ id: "sl_1" }, { id: "sl_2" }] },
       discordIntegration: { findMany: async () => [] },
+      webhookIntegration: { findMany: async () => [] },
       integrationDelivery: {
         create: async ({ data }: { data: Record<string, unknown> }) => {
           created.push(data);
@@ -57,6 +58,7 @@ describe("integration dispatcher", () => {
     const prisma = {
       slackIntegration: { findMany: async () => [{ id: "sl_1" }] },
       discordIntegration: { findMany: async () => [] },
+      webhookIntegration: { findMany: async () => [] },
       integrationDelivery: {
         create: async () => {
           throw new Error("unique constraint failed: dedupeKey");

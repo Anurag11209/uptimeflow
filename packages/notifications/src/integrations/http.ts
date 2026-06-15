@@ -24,15 +24,24 @@ const DEFAULT_TIMEOUT_MS = 10_000;
  * throws: network errors, timeouts and non-2xx all come back as
  * `{ ok: false, status, error }` so the queue processor can decide on retries.
  */
-export async function postJson(url: string, body: unknown, options: PostJsonOptions = {}): Promise<DeliveryResult> {
-  const fetchImpl = (options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike));
+export function postJson(url: string, body: unknown, options: PostJsonOptions = {}): Promise<DeliveryResult> {
+  return postRaw(url, JSON.stringify(body), options);
+}
+
+/**
+ * POST a pre-serialized body — used when the exact bytes matter (e.g. an HMAC
+ * signature must cover the same string that is sent). Same never-throws
+ * contract as postJson.
+ */
+export async function postRaw(url: string, body: string, options: PostJsonOptions = {}): Promise<DeliveryResult> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
     const res = await fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...options.headers },
-      body: JSON.stringify(body),
+      body,
       signal: controller.signal,
     });
     if (res.ok) return { ok: true, status: res.status };

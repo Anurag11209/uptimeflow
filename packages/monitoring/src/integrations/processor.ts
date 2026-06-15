@@ -3,6 +3,7 @@ import type { IntegrationType, PrismaClient } from "@backend-uptime/db";
 import {
   DiscordNotifier,
   SlackNotifier,
+  WebhookNotifier,
   type DeliveryResult,
   type FetchLike,
   type IntegrationEvent,
@@ -68,6 +69,17 @@ export function createIntegrationProcessor(deps: IntegrationProcessorDeps) {
         });
         if (!cfg) return { ok: false, status: 0, skipped: true, error: "integration not found or disabled" };
         return DiscordNotifier.send(cfg.webhookUrl, event, { fetchImpl: deps.fetchImpl, timeoutMs: deps.timeoutMs });
+      }
+      case "WEBHOOK": {
+        const cfg = await prisma.webhookIntegration.findFirst({
+          where: { id: integrationId, organizationId, deletedAt: null },
+          select: { endpoint: true, secret: true },
+        });
+        if (!cfg) return { ok: false, status: 0, skipped: true, error: "integration not found or disabled" };
+        return WebhookNotifier.send(cfg.endpoint, cfg.secret ?? "", event, {
+          fetchImpl: deps.fetchImpl,
+          timeoutMs: deps.timeoutMs,
+        });
       }
       default:
         return { ok: false, status: 0, skipped: true, error: `unsupported integration type: ${type}` };

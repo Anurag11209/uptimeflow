@@ -170,6 +170,7 @@ model Organization {
   ssoConnections         SsoConnection[]
   slackIntegrations      SlackIntegration[]
   discordIntegrations    DiscordIntegration[]
+  webhookIntegrations    WebhookIntegration[]
   integrationDeliveries  IntegrationDelivery[]
 
   @@map("organizations")
@@ -1122,6 +1123,28 @@ model DiscordIntegration {
 
   @@index([organizationId, deletedAt])
   @@map("discord_integrations")
+}
+
+model WebhookIntegration {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  organizationId String
+  name           String
+  // Customer HTTPS endpoint receiving signed event payloads.
+  endpoint       String
+  // HMAC-SHA256 signing secret (generated if omitted at creation).
+  secret         String?
+  enabled        Boolean   @default(true)
+  createdById    String?
+  updatedById    String?
+  deletedById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, deletedAt])
+  @@map("webhook_integrations")
 }
 
 /// Append-only delivery log shared by every integration provider. integrationId
