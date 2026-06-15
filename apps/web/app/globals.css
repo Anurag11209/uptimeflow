@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #0a0f1c;
+  --color-panel: #101725;
+  --color-panel-2: #0d1320;
+  --color-line: #22304a;
+  --color-line-soft: #1f2a3d;
+  --color-text: #e7ecf5;
+  --color-muted: #94a1b8;
+  --color-brand: #ffb224;
+  --color-up: #2fd180;
+  --color-down: #ff5c5c;
+  --color-warn: #ffb224;
+
+  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", monospace;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-ink);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(to right, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+::selection {
+  background: rgba(255, 178, 36, 0.25);
+}
+
+@keyframes pulse-dash {
+  to {
+    stroke-dashoffset: -640;
+  }
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.pulse-path {
+  stroke-dasharray: 320 320;
+  animation: pulse-dash 3.2s linear infinite;
+}
+
+.status-dot {
+  animation: blink 2.4s ease-in-out infinite;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--color-text);
+  -webkit-box-shadow: 0 0 0px 1000px var(--color-panel-2) inset;
+  transition: background-color 5000s ease-in-out 0s;
+}

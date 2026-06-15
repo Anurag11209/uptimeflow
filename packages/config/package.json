@@ -1,0 +1,21 @@
+{
+  "name": "@backend-uptime/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": ["typescript", "eslint", "dist"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./email": { "types": "./dist/email.d.ts", "default": "./dist/email.js" },
+    "./typescript/base": "./typescript/base.json",
+    "./typescript/node": "./typescript/node.json",
+    "./typescript/nextjs": "./typescript/nextjs.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo 'lint: config ok'"
+  },
+  "dependencies": { "zod": "^3.24.1" },
+  "devDependencies": { "typescript": "^5.7.3" }
+}

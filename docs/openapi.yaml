@@ -1,0 +1,258 @@
+openapi: 3.1.0
+info:
+  title: Backend Uptime — Custom REST API (/v1)
+  version: 1.0.0-phase1
+  description: >
+    The read-heavy REST surface that complements Better Auth. Authentication,
+    sessions, social login, password reset, two-factor, and **all organization
+    mutations** (create org, invite/remove member, change role, accept
+    invitation) are served by Better Auth under `/api/auth/*`. When the API is
+    started with `ENABLE_OPENAPI_REFERENCE=true`, Better Auth publishes its own
+    interactive reference at `/api/auth/reference`.
+
+
+    Everything below is the custom `/v1` surface: per-request session required,
+    organization-scoped, RBAC-enforced, cursor-paginated.
+servers:
+  - url: http://localhost:4000
+    description: Local development
+tags:
+  - name: System
+  - name: Identity
+  - name: Organization
+
+paths:
+  /healthz:
+    get:
+      tags: [System]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  uptimeSeconds: { type: number }
+
+  /readyz:
+    get:
+      tags: [System]
+      summary: Readiness probe (checks Postgres + Redis)
+      security: []
+      responses:
+        "200": { description: All dependencies reachable }
+        "503": { description: One or more dependencies degraded }
+
+  /metrics:
+    get:
+      tags: [System]
+      summary: Prometheus metrics
+      description: Bearer-guarded with METRICS_TOKEN when set.
+      responses:
+        "200": { description: Prometheus exposition format }
+        "401": { description: Missing/invalid bearer token }
+
+  /v1/me:
+    get:
+      tags: [Identity]
+      summary: Current user with memberships
+      responses:
+        "200":
+          description: The authenticated user and their organization memberships
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MeResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/organizations/{organizationId}/members:
+    get:
+      tags: [Organization]
+      summary: List members (requires member:read)
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { name: query, in: query, schema: { type: string }, description: Filter by name/email }
+        - { name: role, in: query, schema: { $ref: "#/components/schemas/Role" } }
+      responses:
+        "200":
+          description: Page of members
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemberPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/organizations/{organizationId}/invitations:
+    get:
+      tags: [Organization]
+      summary: List invitations (requires invitation:read)
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, accepted, rejected, canceled] }
+      responses:
+        "200": { description: Page of invitations }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/organizations/{organizationId}/audit-logs:
+    get:
+      tags: [Organization]
+      summary: List audit log entries (requires auditLog:read)
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { name: action, in: query, schema: { type: string } }
+        - { name: actorId, in: query, schema: { type: string } }
+        - { name: resourceType, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200": { description: Page of audit entries (newest first) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/organizations/{organizationId}/overview:
+    get:
+      tags: [Organization]
+      summary: Org stat summary (requires organization:read)
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: Organization, viewer role, and aggregate stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OverviewResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: better-auth.session_token
+  security:
+    - sessionCookie: []
+
+  parameters:
+    OrganizationId:
+      name: organizationId
+      in: path
+      required: true
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+      description: Opaque base64url cursor from a prior page's nextCursor
+
+  responses:
+    Unauthorized:
+      description: No valid session
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Authenticated but lacks the required permission
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found, or not a member of the organization
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Role:
+      type: string
+      enum: [owner, admin, billing_admin, member, read_only]
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: forbidden }
+            message: { type: string }
+            details: {}
+            requestId: { type: string }
+    OrganizationSummary:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        logo: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    MeResponse:
+      type: object
+      properties:
+        user:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+            email: { type: string, format: email }
+            emailVerified: { type: boolean }
+            image: { type: string, nullable: true }
+            twoFactorEnabled: { type: boolean }
+            createdAt: { type: string, format: date-time }
+        activeOrganizationId: { type: string, nullable: true }
+        memberships:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              role: { $ref: "#/components/schemas/Role" }
+              joinedAt: { type: string, format: date-time }
+              organization: { $ref: "#/components/schemas/OrganizationSummary" }
+    MemberPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              role: { $ref: "#/components/schemas/Role" }
+              createdAt: { type: string, format: date-time }
+              user:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  email: { type: string }
+                  image: { type: string, nullable: true }
+        nextCursor: { type: string, nullable: true }
+    OverviewResponse:
+      type: object
+      properties:
+        organization: { $ref: "#/components/schemas/OrganizationSummary" }
+        role: { $ref: "#/components/schemas/Role" }
+        stats:
+          type: object
+          properties:
+            members: { type: integer }
+            pendingInvitations: { type: integer }
+            auditEventsLast30d: { type: integer }
+            monitors: { type: integer, description: "0 until Phase 2" }
+            openIncidents: { type: integer, description: "0 until Phase 4" }

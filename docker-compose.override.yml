@@ -1,0 +1,14 @@
+# Local override (auto-merged by `docker compose`). Not committed infra config.
+#
+# Host port 5432 is taken by another project's container, so publish this
+# project's Postgres on 5433 instead. Only the HOST mapping changes — the
+# container still listens on 5432 internally, so the compose api/worker
+# services (which connect via `postgres:5432`) are unaffected.
+#
+# For host-side tooling (pnpm dev / prisma), use:
+#   DATABASE_URL=postgresql://uptime:uptime@localhost:5433/backend_uptime?schema=public
+services:
+  postgres:
+    # `!override` replaces the base ports list instead of appending to it.
+    ports: !override
+      - "5433:5432"

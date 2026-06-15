@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    monitor: backend-uptime
+
+scrape_configs:
+  - job_name: backend-uptime-api
+    metrics_path: /metrics
+    # The API guards /metrics with a bearer token when METRICS_TOKEN is set.
+    authorization:
+      type: Bearer
+      credentials: dev-metrics-token
+    static_configs:
+      - targets: ["api:4000"]
+        labels:
+          service: api
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

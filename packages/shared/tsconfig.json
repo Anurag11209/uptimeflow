@@ -1,0 +1,5 @@
+{
+  "extends": "@backend-uptime/config/typescript/node",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "include": ["src"]
+}
