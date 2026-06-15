@@ -1,6 +1,7 @@
 import type { CheckStatus, MonitorHealth, PrismaClient, ProbeRegion } from "@backend-uptime/db";
 import type { AuditEvent } from "@backend-uptime/shared";
 import type { AlertDispatcher } from "./alerting/dispatcher.js";
+import type { IntegrationDispatcher } from "./integrations/dispatcher.js";
 import type { EscalationStarter } from "./escalation/engine.js";
 import { detectFlapping } from "./flapping.js";
 import { DEFAULT_REGION } from "./queues.js";
@@ -22,6 +23,8 @@ export interface ProcessOptions {
   isHeartbeatPing?: boolean;
   /** Optional alert fan-out; when absent, incidents are recorded without alerts. */
   alerts?: AlertDispatcher;
+  /** Optional integration fan-out (Slack/Discord/webhooks); fired on open/resolve. */
+  integrations?: IntegrationDispatcher;
   /** Optional escalation engine; used when the monitor has an escalation policy. */
   escalation?: EscalationStarter;
   logger?: PipelineLogger;
@@ -180,6 +183,22 @@ async function openIncident(
   }
 }
 
+/** Best-effort integration fan-out — a failure here must never fail a check. */
+async function dispatchIntegration(
+  opts: ProcessOptions,
+  ctx: { incidentId: string; organizationId: string; monitorId: string; monitorName: string; kind: "opened" | "resolved" },
+): Promise<void> {
+  if (!opts.integrations) return;
+  try {
+    await opts.integrations.dispatchIncident(ctx);
+  } catch (err) {
+    opts.logger?.warn(
+      { monitorId: ctx.monitorId, incidentId: ctx.incidentId, err: err instanceof Error ? err.message : String(err) },
+      "integration dispatch failed",
+    );
+  }
+}
+
 async function findOpenIncidentId(prisma: PrismaClient, monitorId: string): Promise<string | null> {
   const open = await prisma.incident.findFirst({
     where: { monitorId, status: { not: "RESOLVED" } },
@@ -331,6 +350,15 @@ export async function processCheckResult(
               kind: "opened",
             })) ?? 0;
         }
+        // Integrations (Slack/Discord/webhooks) fan out independently of the
+        // escalation/alert-channel routing. Best-effort: never fail a check.
+        await dispatchIntegration(opts, {
+          incidentId,
+          organizationId: monitor.organizationId,
+          monitorId: monitor.id,
+          monitorName: monitor.name,
+          kind: "opened",
+        });
         opts.logger?.warn({ monitorId: monitor.id, incidentId, alertsEnqueued }, "monitor down");
       }
     }
@@ -353,6 +381,13 @@ export async function processCheckResult(
           monitorId: monitor.id,
           kind: "resolved",
         })) ?? 0;
+      await dispatchIntegration(opts, {
+        incidentId,
+        organizationId: monitor.organizationId,
+        monitorId: monitor.id,
+        monitorName: monitor.name,
+        kind: "resolved",
+      });
       opts.logger?.info({ monitorId: monitor.id, incidentId, alertsEnqueued }, "monitor recovered");
     }
   } else if (decision.changed && decision.state === "DOWN") {

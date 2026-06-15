@@ -3,6 +3,7 @@ import { Redis } from "ioredis";
 import { createPrisma } from "@backend-uptime/db";
 import { createAuth } from "@backend-uptime/auth";
 import { createEmailProvider, createEmailQueue, createQueueConnection } from "@backend-uptime/notifications";
+import { createIntegrationDispatcher, createIntegrationQueue } from "@backend-uptime/monitoring";
 import { parseEmailConfig } from "@backend-uptime/config/email";
 import type { Env } from "./env.js";
 import type { SessionData } from "./context.js";
@@ -24,6 +25,13 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
   const redis = new Redis(env.REDIS_URL, { lazyConnect: false });
   const queueConnection = createQueueConnection(env.REDIS_URL);
   const emailQueue = createEmailQueue(queueConnection);
+  const integrationQueue = createIntegrationQueue(queueConnection);
+  const integrationDispatcher = createIntegrationDispatcher({
+    prisma,
+    queue: integrationQueue,
+    webUrl: env.WEB_URL,
+    logger,
+  });
 
   const auditLogs = createAuditLogService({ prisma, logger });
 
@@ -65,6 +73,7 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
     metrics: createMetrics(),
     rateLimiter: createApiRateLimiter(redis, env),
     emailProvider,
+    integrationDispatcher,
   });
 
   const server = http.createServer(app);
@@ -83,6 +92,7 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
     // Stop accepting new connections, then drain dependencies.
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await emailQueue.close().catch((err) => logger.warn({ err }, "queue close failed"));
+    await integrationQueue.close().catch((err) => logger.warn({ err }, "integration queue close failed"));
     await queueConnection.quit().catch(() => queueConnection.disconnect());
     await redis.quit().catch(() => redis.disconnect());
     await prisma.$disconnect().catch((err) => logger.warn({ err }, "prisma disconnect failed"));

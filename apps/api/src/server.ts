@@ -21,6 +21,11 @@ import { meRouter } from "./routes/me.js";
 import { metricsRouter } from "./routes/metrics.js";
 import { onCallSchedulesRouter } from "./routes/oncall-schedules.js";
 import { organizationsRouter } from "./routes/organizations.js";
+import { slackIntegrationRouter } from "./routes/integrations/slack.js";
+import { discordIntegrationRouter } from "./routes/integrations/discord.js";
+import { webhookIntegrationRouter } from "./routes/integrations/webhook.js";
+import { integrationDeliveriesRouter } from "./routes/integrations/deliveries.js";
+import type { IntegrationDispatcher } from "@backend-uptime/monitoring";
 import { createApiKeyService, type ApiKeyService } from "./services/api-key.service.js";
 import { createAuditLogService, type AuditLogService } from "./services/audit-log.service.js";
 import {
@@ -56,6 +61,8 @@ export interface ServerDeps {
   rateLimiter: RateLimiterLike | null;
   /** Email provider for the internal email health endpoint (defaults to logging). */
   emailProvider?: EmailProvider;
+  /** Fans integration test/incident deliveries onto the delivery queue. */
+  integrationDispatcher?: IntegrationDispatcher;
   /** Override services in tests; defaults are built from prisma. */
   services?: Partial<ServerServices>;
 }
@@ -135,6 +142,26 @@ export function createServer(deps: ServerDeps): Express {
     "/organizations/:organizationId/oncall-schedules",
     authn,
     onCallSchedulesRouter({ prisma: deps.prisma, onCallSchedules: services.onCallSchedules }),
+  );
+  v1.use(
+    "/organizations/:organizationId/integrations/slack",
+    authn,
+    slackIntegrationRouter({ prisma: deps.prisma, auditLogs, dispatcher: deps.integrationDispatcher }),
+  );
+  v1.use(
+    "/organizations/:organizationId/integrations/discord",
+    authn,
+    discordIntegrationRouter({ prisma: deps.prisma, auditLogs, dispatcher: deps.integrationDispatcher }),
+  );
+  v1.use(
+    "/organizations/:organizationId/integrations/webhooks",
+    authn,
+    webhookIntegrationRouter({ prisma: deps.prisma, auditLogs, dispatcher: deps.integrationDispatcher }),
+  );
+  v1.use(
+    "/organizations/:organizationId/integrations/deliveries",
+    authn,
+    integrationDeliveriesRouter({ prisma: deps.prisma }),
   );
   v1.use(
     "/organizations/:organizationId",

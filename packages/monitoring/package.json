@@ -5,7 +5,12 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -16,7 +21,8 @@
     "@backend-uptime/db": "workspace:*",
     "@backend-uptime/shared": "workspace:*",
     "bullmq": "^5.34.0",
-    "ioredis": "^5.4.2"
+    "ioredis": "^5.4.2",
+    "@backend-uptime/notifications": "workspace:*"
   },
   "devDependencies": {
     "@backend-uptime/config": "workspace:*",
