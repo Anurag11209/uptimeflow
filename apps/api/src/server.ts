@@ -22,6 +22,7 @@ import { metricsRouter } from "./routes/metrics.js";
 import { onCallSchedulesRouter } from "./routes/oncall-schedules.js";
 import { organizationsRouter } from "./routes/organizations.js";
 import { slackIntegrationRouter } from "./routes/integrations/slack.js";
+import { discordIntegrationRouter } from "./routes/integrations/discord.js";
 import type { IntegrationDispatcher } from "@backend-uptime/monitoring";
 import { createApiKeyService, type ApiKeyService } from "./services/api-key.service.js";
 import { createAuditLogService, type AuditLogService } from "./services/audit-log.service.js";
@@ -144,6 +145,11 @@ export function createServer(deps: ServerDeps): Express {
     "/organizations/:organizationId/integrations/slack",
     authn,
     slackIntegrationRouter({ prisma: deps.prisma, auditLogs, dispatcher: deps.integrationDispatcher }),
+  );
+  v1.use(
+    "/organizations/:organizationId/integrations/discord",
+    authn,
+    discordIntegrationRouter({ prisma: deps.prisma, auditLogs, dispatcher: deps.integrationDispatcher }),
   );
   v1.use(
     "/organizations/:organizationId",

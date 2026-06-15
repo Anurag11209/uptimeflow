@@ -63,11 +63,15 @@ export function createIntegrationDispatcher(deps: IntegrationDispatcherDeps): In
 
   /** Every enabled, non-deleted integration target for the org. */
   async function targetsFor(organizationId: string): Promise<Target[]> {
-    const slack = await deps.prisma.slackIntegration.findMany({
-      where: { organizationId, enabled: true, deletedAt: null },
-      select: { id: true },
-    });
-    return slack.map((s) => ({ type: "SLACK" as const, id: s.id }));
+    const where = { organizationId, enabled: true, deletedAt: null };
+    const [slack, discord] = await Promise.all([
+      deps.prisma.slackIntegration.findMany({ where, select: { id: true } }),
+      deps.prisma.discordIntegration.findMany({ where, select: { id: true } }),
+    ]);
+    return [
+      ...slack.map((s) => ({ type: "SLACK" as const, id: s.id })),
+      ...discord.map((d) => ({ type: "DISCORD" as const, id: d.id })),
+    ];
   }
 
   async function fanOut(

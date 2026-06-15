@@ -24,3 +24,4 @@ export { LoggingEmailProvider } from "./email/logging-provider.js";
 export * from "./integrations/event.js";
 export * from "./integrations/http.js";
 export * from "./slack/index.js";
+export * from "./discord/index.js";

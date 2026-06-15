@@ -1,6 +1,12 @@
 import type { Job } from "bullmq";
 import type { IntegrationType, PrismaClient } from "@backend-uptime/db";
-import { SlackNotifier, type DeliveryResult, type FetchLike, type IntegrationEvent } from "@backend-uptime/notifications";
+import {
+  DiscordNotifier,
+  SlackNotifier,
+  type DeliveryResult,
+  type FetchLike,
+  type IntegrationEvent,
+} from "@backend-uptime/notifications";
 import type { IntegrationJobData } from "./queue.js";
 
 export interface IntegrationProcessorLogger {
@@ -54,6 +60,14 @@ export function createIntegrationProcessor(deps: IntegrationProcessorDeps) {
         });
         if (!cfg) return { ok: false, status: 0, skipped: true, error: "integration not found or disabled" };
         return SlackNotifier.send(cfg.webhookUrl, event, { fetchImpl: deps.fetchImpl, timeoutMs: deps.timeoutMs });
+      }
+      case "DISCORD": {
+        const cfg = await prisma.discordIntegration.findFirst({
+          where: { id: integrationId, organizationId, deletedAt: null },
+          select: { webhookUrl: true },
+        });
+        if (!cfg) return { ok: false, status: 0, skipped: true, error: "integration not found or disabled" };
+        return DiscordNotifier.send(cfg.webhookUrl, event, { fetchImpl: deps.fetchImpl, timeoutMs: deps.timeoutMs });
       }
       default:
         return { ok: false, status: 0, skipped: true, error: `unsupported integration type: ${type}` };

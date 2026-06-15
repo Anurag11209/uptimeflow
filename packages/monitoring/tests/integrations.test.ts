@@ -23,6 +23,7 @@ describe("integration dispatcher", () => {
     const enqueued: { data: IntegrationJobData; opts?: { jobId?: string } }[] = [];
     const prisma = {
       slackIntegration: { findMany: async () => [{ id: "sl_1" }, { id: "sl_2" }] },
+      discordIntegration: { findMany: async () => [] },
       integrationDelivery: {
         create: async ({ data }: { data: Record<string, unknown> }) => {
           created.push(data);
@@ -55,6 +56,7 @@ describe("integration dispatcher", () => {
   it("is idempotent — a dedupeKey conflict skips that target", async () => {
     const prisma = {
       slackIntegration: { findMany: async () => [{ id: "sl_1" }] },
+      discordIntegration: { findMany: async () => [] },
       integrationDelivery: {
         create: async () => {
           throw new Error("unique constraint failed: dedupeKey");

@@ -169,6 +169,7 @@ model Organization {
   webhooks               Webhook[]
   ssoConnections         SsoConnection[]
   slackIntegrations      SlackIntegration[]
+  discordIntegrations    DiscordIntegration[]
   integrationDeliveries  IntegrationDelivery[]
 
   @@map("organizations")
@@ -1101,6 +1102,26 @@ model SlackIntegration {
 
   @@index([organizationId, deletedAt])
   @@map("slack_integrations")
+}
+
+model DiscordIntegration {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  organizationId String
+  name           String
+  // Discord channel webhook URL (https://discord.com/api/webhooks/...).
+  webhookUrl     String
+  enabled        Boolean   @default(true)
+  createdById    String?
+  updatedById    String?
+  deletedById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, deletedAt])
+  @@map("discord_integrations")
 }
 
 /// Append-only delivery log shared by every integration provider. integrationId
