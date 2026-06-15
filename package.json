@@ -1,0 +1,28 @@
+{
+  "name": "backend-uptime",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "db:generate": "pnpm --filter @backend-uptime/db generate",
+    "db:migrate": "pnpm --filter @backend-uptime/db migrate:dev",
+    "db:deploy": "pnpm --filter @backend-uptime/db migrate:deploy",
+    "db:seed": "pnpm --filter @backend-uptime/db seed",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,yml,yaml}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "turbo": "^2.4.0",
+    "typescript": "^5.7.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "ioredis": "5.10.1"
+    }
+  }
+}

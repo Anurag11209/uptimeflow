@@ -1,0 +1,4 @@
+{
+  "// note": "This project is pinned to Prisma 6 (see packages/db). Use the matching 6.x Prisma extension — the 7.x extension wrongly flags `url` in the datasource. To pin: Extensions view → Prisma → gear icon → 'Install Specific Version…' → pick the latest 6.x.",
+  "recommendations": ["Prisma.prisma", "esbenp.prettier-vscode", "dbaeumer.vscode-eslint"]
+}
