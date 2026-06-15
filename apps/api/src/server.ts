@@ -21,6 +21,8 @@ import { meRouter } from "./routes/me.js";
 import { metricsRouter } from "./routes/metrics.js";
 import { onCallSchedulesRouter } from "./routes/oncall-schedules.js";
 import { organizationsRouter } from "./routes/organizations.js";
+import { statusPagesRouter } from "./routes/status-pages.js";
+import { statusPagesAuthedRouter } from "./routes/status-pages.authed.js";
 import { createApiKeyService, type ApiKeyService } from "./services/api-key.service.js";
 import { createAuditLogService, type AuditLogService } from "./services/audit-log.service.js";
 import {
@@ -31,6 +33,11 @@ import { createIncidentService, type IncidentService } from "./services/incident
 import { createMemberService, type MemberService } from "./services/member.service.js";
 import { createOnCallScheduleService, type OnCallScheduleService } from "./services/oncall.service.js";
 import { createOrgStatsService, type OrgStatsService } from "./services/org-stats.service.js";
+import {
+  createStatusPageService,
+  type StatusNotifier,
+  type StatusPageService,
+} from "./services/status-page.service.js";
 import { metricsMiddleware, type Logger, type Metrics } from "./telemetry.js";
 
 export interface ServerServices {
@@ -41,6 +48,7 @@ export interface ServerServices {
   incidents: IncidentService;
   escalationPolicies: EscalationPolicyService;
   onCallSchedules: OnCallScheduleService;
+  statusPages: StatusPageService;
 }
 
 export interface ServerDeps {
@@ -56,6 +64,8 @@ export interface ServerDeps {
   rateLimiter: RateLimiterLike | null;
   /** Email provider for the internal email health endpoint (defaults to logging). */
   emailProvider?: EmailProvider;
+  /** Sends status-page subscriber emails; omitted in tests (no email is sent). */
+  statusNotifier?: StatusNotifier;
   /** Override services in tests; defaults are built from prisma. */
   services?: Partial<ServerServices>;
 }
@@ -75,6 +85,14 @@ export function createServer(deps: ServerDeps): Express {
     onCallSchedules:
       deps.services?.onCallSchedules ??
       createOnCallScheduleService({ prisma: deps.prisma, auditLogs }),
+    statusPages:
+      deps.services?.statusPages ??
+      createStatusPageService({
+        prisma: deps.prisma,
+        auditLogs,
+        notifier: deps.statusNotifier,
+        webUrl: deps.env.WEB_URL,
+      }),
   };
 
   const app = express();
@@ -100,6 +118,8 @@ export function createServer(deps: ServerDeps): Express {
   app.use(healthRouter({ prisma: deps.prisma, redis: deps.redis }));
   app.use(metricsRouter({ registry: deps.metrics.registry, env: deps.env }));
   app.use(emailHealthRouter({ emailProvider: deps.emailProvider ?? new LoggingEmailProvider(deps.logger) }));
+  // Public, unauthenticated customer-facing status pages (addressed by slug).
+  app.use(statusPagesRouter({ statusPages: services.statusPages, rateLimiter: deps.rateLimiter }));
 
   // Versioned REST surface.
   const v1 = Router();
@@ -135,6 +155,11 @@ export function createServer(deps: ServerDeps): Express {
     "/organizations/:organizationId/oncall-schedules",
     authn,
     onCallSchedulesRouter({ prisma: deps.prisma, onCallSchedules: services.onCallSchedules }),
+  );
+  v1.use(
+    "/organizations/:organizationId/status-pages",
+    authn,
+    statusPagesAuthedRouter({ prisma: deps.prisma, statusPages: services.statusPages }),
   );
   v1.use(
     "/organizations/:organizationId",
