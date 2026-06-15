@@ -21,13 +21,15 @@ export const PROBE_REGIONS = [
 export const DEFAULT_REGION: ProbeRegion = "NA_EAST";
 
 /**
- * One queue per region (`monitor-checks:<REGION>`). Regional workers consume
+ * One queue per region (`monitor-checks-<REGION>`). Regional workers consume
  * only their own queue, so the same scheduler/worker code runs unchanged
  * whether one process serves all regions (dev) or a process per region (the
  * Phase 3 monitoring-agent).
  */
 export function checkQueueName(region: ProbeRegion): string {
-  return `${MONITOR_CHECK_QUEUE_PREFIX}:${region}`;
+  // BullMQ (>=5) rejects queue names containing ':' since it uses ':' as the
+  // Redis key separator, so join the prefix and region with '-'.
+  return `${MONITOR_CHECK_QUEUE_PREFIX}-${region}`;
 }
 
 /** BullMQ requires `maxRetriesPerRequest: null` on its connections. */
