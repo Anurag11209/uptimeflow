@@ -23,13 +23,18 @@ import {
   createEscalationProcessor,
   createEscalationQueue,
   createEscalationStarter,
+  createIntegrationDispatcher,
+  createIntegrationProcessor,
+  createIntegrationQueue,
   createQueueConnection as createMonitorConnection,
   createScheduler,
   loggingTransport,
   webhookTransport,
+  INTEGRATION_QUEUE_NAME,
   type AlertJobData,
   type CheckJobData,
   type EscalationJobData,
+  type IntegrationJobData,
   type SchedulableQueue,
 } from "@backend-uptime/monitoring";
 import {
@@ -134,6 +139,30 @@ closers.push(async () => {
   await emailConnection.quit().catch(() => emailConnection.disconnect());
 });
 
+// ───────────────────── Integration delivery worker ──────────────────────────
+// Always on (independent of MONITORING_ENABLED): drains the integration queue
+// that the API (test sends) and the monitoring pipeline (incident events) fill.
+const integrationDeliveryPrisma = createPrisma({ databaseUrl: env.DATABASE_URL });
+const integrationConnection = createQueueConnection(env.REDIS_URL);
+const integrationWorker = new Worker<IntegrationJobData>(
+  INTEGRATION_QUEUE_NAME,
+  createIntegrationProcessor({ prisma: integrationDeliveryPrisma, logger }),
+  { connection: integrationConnection, concurrency: env.WORKER_CONCURRENCY, stalledInterval: 30_000, maxStalledCount: 2 },
+);
+integrationWorker.on("ready", () => logger.info({ queue: INTEGRATION_QUEUE_NAME }, "integration worker ready"));
+integrationWorker.on("failed", (job, err) =>
+  logger.error(
+    { jobId: job?.id, deliveryId: job?.data.deliveryId, attempts: job?.attemptsMade, err: err.message },
+    "integration job failed",
+  ),
+);
+integrationWorker.on("error", (err) => logger.error({ err }, "integration worker error"));
+closers.push(async () => {
+  await integrationWorker.close();
+  await integrationConnection.quit().catch(() => integrationConnection.disconnect());
+  await integrationDeliveryPrisma.$disconnect();
+});
+
 // ─────────────────────────── Monitoring engine ──────────────────────────────
 if (env.MONITORING_ENABLED) {
   const known = new Set<string>(PROBE_REGIONS);
@@ -172,6 +201,17 @@ if (env.MONITORING_ENABLED) {
     await alertQueue.close();
     await alertConnection.quit().catch(() => alertConnection.disconnect());
   });
+
+  // Integrations: fan incident open/resolve out to Slack/Discord/webhooks. The
+  // delivery worker that drains this queue is started unconditionally above.
+  const integrationDispatchQueue = createIntegrationQueue(queueConnection);
+  const integrations = createIntegrationDispatcher({
+    prisma,
+    queue: integrationDispatchQueue,
+    webUrl: env.WEB_URL,
+    logger,
+  });
+  closers.push(() => integrationDispatchQueue.close());
 
   const alertWorkerConnection = createMonitorConnection(env.REDIS_URL);
   const alertWorker = new Worker<AlertJobData>(
@@ -220,7 +260,7 @@ if (env.MONITORING_ENABLED) {
     await escalationWorkerConnection.quit().catch(() => escalationWorkerConnection.disconnect());
   });
 
-  const processCheck = createCheckProcessor({ prisma, alerts, escalation, logger });
+  const processCheck = createCheckProcessor({ prisma, alerts, integrations, escalation, logger });
   for (const region of regions) {
     // Each Worker needs its own blocking-capable connection.
     const connection = createMonitorConnection(env.REDIS_URL);

@@ -18,3 +18,9 @@ export {
 } from "./email/ses-provider.js";
 export { createSesClient } from "./email/ses-client.js";
 export { LoggingEmailProvider } from "./email/logging-provider.js";
+
+// Integrations platform (Phase 8): provider-agnostic event + per-provider
+// message builders and transport notifiers (Slack/Discord/webhooks).
+export * from "./integrations/event.js";
+export * from "./integrations/http.js";
+export * from "./slack/index.js";

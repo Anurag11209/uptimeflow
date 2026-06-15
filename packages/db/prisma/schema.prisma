@@ -168,6 +168,8 @@ model Organization {
   apiKeys                ApiKey[]
   webhooks               Webhook[]
   ssoConnections         SsoConnection[]
+  slackIntegrations      SlackIntegration[]
+  integrationDeliveries  IntegrationDelivery[]
 
   @@map("organizations")
 }
@@ -1058,4 +1060,71 @@ model SsoConnection {
 
   @@index([organizationId, deletedAt])
   @@map("sso_connections")
+}
+
+// ════════════ 12 · INTEGRATIONS PLATFORM (Phase 8) ═════════════════════════
+//  Outbound chat/webhook integrations. Each provider has its own config table
+//  (separate secrets, separate lifecycle) but they share one append-only
+//  delivery log so the UI can show per-integration history. Control-plane
+//  conventions apply: uuid(7) PKs, organizationId tenancy, soft delete + actor
+//  columns on config rows; the delivery log is immutable history (no soft del).
+
+enum IntegrationType {
+  SLACK
+  DISCORD
+  WEBHOOK
+}
+
+enum IntegrationDeliveryStatus {
+  PENDING
+  SENDING
+  SUCCESS
+  FAILED
+  DEAD // retries exhausted (dead-letter)
+}
+
+model SlackIntegration {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  organizationId String
+  name           String
+  // Slack Incoming Webhook URL (https://hooks.slack.com/services/...).
+  webhookUrl     String
+  enabled        Boolean   @default(true)
+  createdById    String?
+  updatedById    String?
+  deletedById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, deletedAt])
+  @@map("slack_integrations")
+}
+
+/// Append-only delivery log shared by every integration provider. integrationId
+/// is polymorphic (points at the provider table named by integrationType) and
+/// is intentionally NOT an FK — same denormalized pattern as audit actors.
+model IntegrationDelivery {
+  id              String                    @id @default(uuid(7)) @db.Uuid
+  organizationId  String
+  integrationType IntegrationType
+  integrationId   String                    @db.Uuid
+  event           String // "incident.opened" | "test" | ...
+  status          IntegrationDeliveryStatus @default(PENDING)
+  attempts        Int                       @default(0)
+  requestUrl      String?
+  responseStatus  Int?
+  error           String?
+  // Idempotency key: one delivery row per (integration, event-instance).
+  dedupeKey       String?                   @unique
+  sentAt          DateTime?
+  createdAt       DateTime                  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([integrationType, integrationId, createdAt(sort: Desc)])
+  @@map("integration_deliveries")
 }

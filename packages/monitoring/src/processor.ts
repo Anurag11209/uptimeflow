@@ -1,6 +1,7 @@
 import type { Job } from "bullmq";
 import type { PrismaClient } from "@backend-uptime/db";
 import type { AlertDispatcher } from "./alerting/dispatcher.js";
+import type { IntegrationDispatcher } from "./integrations/dispatcher.js";
 import type { EscalationStarter } from "./escalation/engine.js";
 import { executeCheck } from "./execute.js";
 import { processCheckResult, toSnapshot, type MonitorRow, type PipelineLogger } from "./pipeline.js";
@@ -16,6 +17,8 @@ export interface CheckProcessorDeps {
   probes?: ProbeRegistry;
   /** Optional alert fan-out, passed through to the result pipeline. */
   alerts?: AlertDispatcher;
+  /** Optional integration fan-out (Slack/Discord/webhooks), passed through. */
+  integrations?: IntegrationDispatcher;
   /** Optional escalation engine, passed through to the result pipeline. */
   escalation?: EscalationStarter;
   logger?: ProcessorLogger;
@@ -59,6 +62,7 @@ export function createCheckProcessor(deps: CheckProcessorDeps) {
     const result = await processCheckResult(deps.prisma, monitor, outcome, {
       region,
       alerts: deps.alerts,
+      integrations: deps.integrations,
       escalation: deps.escalation,
       logger: deps.logger,
     });

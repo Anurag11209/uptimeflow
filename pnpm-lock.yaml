@@ -284,6 +284,9 @@ importers:
       '@backend-uptime/db':
         specifier: workspace:*
         version: link:../db
+      '@backend-uptime/notifications':
+        specifier: workspace:*
+        version: link:../notifications
       '@backend-uptime/shared':
         specifier: workspace:*
         version: link:../shared
