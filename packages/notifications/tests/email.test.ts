@@ -29,6 +29,10 @@ describe("renderEmail", () => {
       { template: "alert", to: "a@b.co", monitorName: "API", status: "DOWN", organizationName: "Acme", timestamp: "2026-06-15T00:00:00Z", ctaUrl: "https://x/m" },
       { template: "incident", to: "a@b.co", incidentTitle: "API outage", severity: "MAJOR", description: "connect refused", statusPageUrl: "https://x/s" },
       { template: "status_page_update", to: "a@b.co", pageName: "Status", incidentTitle: "Outage", statusChange: "MONITORING", publicUrl: "https://x/p" },
+      { template: "status_subscribe_confirm", to: "a@b.co", pageName: "Acme Status", confirmUrl: "https://x/status/acme/verify?token=t" },
+      { template: "status_incident_opened", to: "a@b.co", pageName: "Acme Status", incidentTitle: "API degraded", statusLabel: "INVESTIGATING", body: "Looking into it.", publicUrl: "https://x/status/acme", unsubscribeUrl: "https://x/status/acme/unsubscribe?token=u" },
+      { template: "status_incident_updated", to: "a@b.co", pageName: "Acme Status", incidentTitle: "API degraded", statusLabel: "MONITORING", body: "Recovering.", publicUrl: "https://x/status/acme", unsubscribeUrl: "https://x/status/acme/unsubscribe?token=u" },
+      { template: "status_incident_resolved", to: "a@b.co", pageName: "Acme Status", incidentTitle: "API degraded", statusLabel: "RESOLVED", body: "All good.", publicUrl: "https://x/status/acme", unsubscribeUrl: "https://x/status/acme/unsubscribe?token=u" },
     ];
     for (const job of jobs) {
       const rendered = renderEmail(job);

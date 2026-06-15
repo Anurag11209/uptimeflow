@@ -9,6 +9,7 @@ import type { SessionData } from "./context.js";
 import { createApiRateLimiter } from "./middleware/rate-limit.js";
 import { createServer } from "./server.js";
 import { createAuditLogService } from "./services/audit-log.service.js";
+import { createStatusNotifier } from "./services/status-notifier.js";
 import { createMetrics, type Logger } from "./telemetry.js";
 
 export interface RunningApi {
@@ -65,6 +66,7 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
     metrics: createMetrics(),
     rateLimiter: createApiRateLimiter(redis, env),
     emailProvider,
+    statusNotifier: createStatusNotifier({ prisma, emailQueue, webUrl: env.WEB_URL, logger }),
   });
 
   const server = http.createServer(app);

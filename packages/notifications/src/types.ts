@@ -36,6 +36,18 @@ export type EmailJob =
       incidentTitle: string;
       statusChange: string;
       publicUrl: string;
+    }
+  // Status-page subscriber double opt-in + incident lifecycle notifications.
+  | { template: "status_subscribe_confirm"; to: string; pageName: string; confirmUrl: string }
+  | {
+      template: "status_incident_opened" | "status_incident_updated" | "status_incident_resolved";
+      to: string;
+      pageName: string;
+      incidentTitle: string;
+      statusLabel: string;
+      body: string;
+      publicUrl: string;
+      unsubscribeUrl: string;
     };
 
 export type EmailTemplate = EmailJob["template"];
