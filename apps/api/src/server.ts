@@ -25,7 +25,13 @@ import { slackIntegrationRouter } from "./routes/integrations/slack.js";
 import { discordIntegrationRouter } from "./routes/integrations/discord.js";
 import { webhookIntegrationRouter } from "./routes/integrations/webhook.js";
 import { integrationDeliveriesRouter } from "./routes/integrations/deliveries.js";
+import { stripeWebhookRouter } from "./routes/billing/webhooks.js";
+import { billingRouter } from "./routes/billing/router.js";
 import type { IntegrationDispatcher } from "@backend-uptime/monitoring";
+import type { BillingProvider } from "@backend-uptime/billing";
+import { createBillingWebhookService } from "./services/billing-webhook.service.js";
+import { createPlanLimitsService, type PlanLimitsService } from "./services/plan-limits.service.js";
+import { createBillingService, type BillingService } from "./services/billing.service.js";
 import { createApiKeyService, type ApiKeyService } from "./services/api-key.service.js";
 import { createAuditLogService, type AuditLogService } from "./services/audit-log.service.js";
 import {
@@ -36,6 +42,7 @@ import { createIncidentService, type IncidentService } from "./services/incident
 import { createMemberService, type MemberService } from "./services/member.service.js";
 import { createOnCallScheduleService, type OnCallScheduleService } from "./services/oncall.service.js";
 import { createOrgStatsService, type OrgStatsService } from "./services/org-stats.service.js";
+import type { BillingWebhookService } from "./services/billing-webhook.service.js";
 import { metricsMiddleware, type Logger, type Metrics } from "./telemetry.js";
 
 export interface ServerServices {
@@ -46,6 +53,9 @@ export interface ServerServices {
   incidents: IncidentService;
   escalationPolicies: EscalationPolicyService;
   onCallSchedules: OnCallScheduleService;
+  billingWebhooks: BillingWebhookService;
+  planLimits: PlanLimitsService;
+  billing: BillingService;
 }
 
 export interface ServerDeps {
@@ -63,6 +73,8 @@ export interface ServerDeps {
   emailProvider?: EmailProvider;
   /** Fans integration test/incident deliveries onto the delivery queue. */
   integrationDispatcher?: IntegrationDispatcher;
+  /** Stripe provider for webhook verification; absent when billing is unconfigured. */
+  billingProvider?: BillingProvider;
   /** Override services in tests; defaults are built from prisma. */
   services?: Partial<ServerServices>;
 }
@@ -70,6 +82,8 @@ export interface ServerDeps {
 export function createServer(deps: ServerDeps): Express {
   const auditLogs =
     deps.services?.auditLogs ?? createAuditLogService({ prisma: deps.prisma, logger: deps.logger });
+  const planLimits =
+    deps.services?.planLimits ?? createPlanLimitsService({ prisma: deps.prisma });
   const services: ServerServices = {
     members: deps.services?.members ?? createMemberService({ prisma: deps.prisma }),
     auditLogs,
@@ -82,6 +96,19 @@ export function createServer(deps: ServerDeps): Express {
     onCallSchedules:
       deps.services?.onCallSchedules ??
       createOnCallScheduleService({ prisma: deps.prisma, auditLogs }),
+    billingWebhooks:
+      deps.services?.billingWebhooks ??
+      createBillingWebhookService({ prisma: deps.prisma, auditLogs, logger: deps.logger }),
+    planLimits: planLimits,
+    billing:
+      deps.services?.billing ??
+      createBillingService({
+        prisma: deps.prisma,
+        plans: planLimits,
+        provider: deps.billingProvider,
+        webUrl: deps.env.WEB_URL,
+        auditLogs,
+      }),
   };
 
   const app = express();
@@ -100,6 +127,16 @@ export function createServer(deps: ServerDeps): Express {
   // It MUST be mounted before express.json() — a consumed body stream
   // breaks Better Auth's handler.
   app.all("/api/auth/{*any}", toNodeHandler(deps.authHandler));
+
+  // Stripe webhook also needs the raw body for signature verification, so it
+  // too is mounted before express.json() (it brings its own raw() parser).
+  app.use(
+    stripeWebhookRouter({
+      provider: deps.billingProvider,
+      service: services.billingWebhooks,
+      logger: deps.logger,
+    }),
+  );
 
   app.use(express.json({ limit: "1mb" }));
 
@@ -162,6 +199,11 @@ export function createServer(deps: ServerDeps): Express {
     "/organizations/:organizationId/integrations/deliveries",
     authn,
     integrationDeliveriesRouter({ prisma: deps.prisma }),
+  );
+  v1.use(
+    "/organizations/:organizationId/billing",
+    authn,
+    billingRouter({ prisma: deps.prisma, billing: services.billing }),
   );
   v1.use(
     "/organizations/:organizationId",

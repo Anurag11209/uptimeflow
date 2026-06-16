@@ -4,6 +4,7 @@ import { createPrisma } from "@backend-uptime/db";
 import { createAuth } from "@backend-uptime/auth";
 import { createEmailProvider, createEmailQueue, createQueueConnection } from "@backend-uptime/notifications";
 import { createIntegrationDispatcher, createIntegrationQueue } from "@backend-uptime/monitoring";
+import { createStripeBillingProvider, createStripeClient } from "@backend-uptime/billing";
 import { parseEmailConfig } from "@backend-uptime/config/email";
 import type { Env } from "./env.js";
 import type { SessionData } from "./context.js";
@@ -34,6 +35,17 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
   });
 
   const auditLogs = createAuditLogService({ prisma, logger });
+
+  // Stripe billing is optional: only wire the provider when fully configured
+  // (secret + webhook secret). When absent, the webhook route answers 503 and
+  // billing actions return a clear "not configured" error.
+  const billingProvider =
+    env.billingEnabled && env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET
+      ? createStripeBillingProvider({
+          stripe: createStripeClient(env.STRIPE_SECRET_KEY),
+          webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+        })
+      : undefined;
 
   const auth = createAuth({
     prisma,
@@ -74,6 +86,7 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
     rateLimiter: createApiRateLimiter(redis, env),
     emailProvider,
     integrationDispatcher,
+    billingProvider,
   });
 
   const server = http.createServer(app);

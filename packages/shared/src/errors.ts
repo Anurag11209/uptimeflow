@@ -4,6 +4,7 @@ export const ERROR_CODES = [
   "validation_failed",
   "unauthorized",
   "forbidden",
+  "payment_required",
   "not_found",
   "conflict",
   "rate_limited",
@@ -18,6 +19,9 @@ const DEFAULT_STATUS: Record<ErrorCode, number> = {
   validation_failed: 400,
   unauthorized: 401,
   forbidden: 403,
+  // Over a plan limit / capability not on the current plan — the caller must
+  // upgrade or free up capacity, so it is distinct from 403 (RBAC denial).
+  payment_required: 402,
   not_found: 404,
   conflict: 409,
   rate_limited: 429,
@@ -56,6 +60,10 @@ export class AppError extends Error {
   }
   static conflict(message: string, details?: unknown): AppError {
     return new AppError("conflict", message, { details });
+  }
+  /** Plan limit reached or capability not included — surface upgrade details. */
+  static paymentRequired(message: string, details?: unknown): AppError {
+    return new AppError("payment_required", message, { details });
   }
 }
 

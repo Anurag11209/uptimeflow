@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@backend-uptime/auth": "workspace:*",
+    "@backend-uptime/billing": "workspace:*",
     "@backend-uptime/config": "workspace:*",
     "@backend-uptime/db": "workspace:*",
     "@backend-uptime/monitoring": "workspace:*",

@@ -37,6 +37,13 @@ const schema = z
     AWS_SECRET_ACCESS_KEY: z.string().optional(),
     EMAIL_MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(3),
 
+    // Stripe billing. Optional so the app boots without billing configured
+    // (local dev, CI, self-hosters who don't charge). When the secret key is
+    // present the webhook secret must be too — see superRefine below.
+    STRIPE_SECRET_KEY: z.string().min(1).optional(),
+    STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
+    STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+
     RATE_LIMIT_POINTS: z.coerce.number().int().min(1).default(120),
     RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).default(60),
 
@@ -72,12 +79,23 @@ const schema = z
         message: "Required in production — /metrics must not be public.",
       });
     }
+    // Webhook signature verification is impossible without the signing secret,
+    // so a configured Stripe integration must supply both.
+    if (env.STRIPE_SECRET_KEY && !env.STRIPE_WEBHOOK_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["STRIPE_WEBHOOK_SECRET"],
+        message: "Required when STRIPE_SECRET_KEY is set — webhooks can't be verified without it.",
+      });
+    }
   });
 
 export type Env = z.infer<typeof schema> & {
   corsOrigins: string[];
   isProduction: boolean;
   enableOpenApiReference: boolean;
+  /** True when Stripe billing is fully configured (secret + webhook secret). */
+  billingEnabled: boolean;
 };
 
 export function parseEnv(source: NodeJS.ProcessEnv): Env {
@@ -97,5 +115,6 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
     corsOrigins: [...new Set([env.WEB_URL, ...extraOrigins])],
     isProduction: env.NODE_ENV === "production",
     enableOpenApiReference: env.ENABLE_OPENAPI_REFERENCE ?? env.NODE_ENV !== "production",
+    billingEnabled: Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET),
   };
 }
