@@ -44,6 +44,7 @@ import { createOnCallScheduleService, type OnCallScheduleService } from "./servi
 import { createOrgStatsService, type OrgStatsService } from "./services/org-stats.service.js";
 import type { BillingWebhookService } from "./services/billing-webhook.service.js";
 import { customDomainsRouter } from "./routes/custom-domains.js";
+import { domainResolutionRouter } from "./routes/domain-resolution.js";
 import {
   createCustomDomainService,
   type CustomDomainService,
@@ -157,6 +158,9 @@ export function createServer(deps: ServerDeps): Express {
   app.use(healthRouter({ prisma: deps.prisma, redis: deps.redis }));
   app.use(metricsRouter({ registry: deps.metrics.registry, env: deps.env }));
   app.use(emailHealthRouter({ emailProvider: deps.emailProvider ?? new LoggingEmailProvider(deps.logger) }));
+  // Edge hostname → status-page resolution (Caddy TLS ask + public renderer).
+  // Unauthenticated and unthrottled by design: the hostname is the lookup key.
+  app.use(domainResolutionRouter({ service: services.customDomains }));
 
   // Versioned REST surface.
   const v1 = Router();

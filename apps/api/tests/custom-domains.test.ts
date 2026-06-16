@@ -67,11 +67,17 @@ function fakePrisma(opts: { statusPageIds?: string[] } = {}) {
         byDomain.set(domain, id);
         return row;
       },
-      findFirst: async ({ where }: { where: { id?: string; organizationId?: string } }) => {
+      findFirst: async ({
+        where,
+      }: {
+        where: { id?: string; organizationId?: string; domain?: string; verificationStatus?: string };
+      }) => {
         for (const r of rows.values()) {
           if (
             (!where.id || r.id === where.id) &&
             (!where.organizationId || r.organizationId === where.organizationId) &&
+            (!where.domain || r.domain === where.domain) &&
+            (!where.verificationStatus || r.verificationStatus === where.verificationStatus) &&
             r.deletedAt === null
           ) {
             return r;
@@ -262,6 +268,10 @@ const fakeService: CustomDomainService = {
   create: async () => summary as never,
   verify: async () => ({ ...summary, verificationStatus: "VERIFIED" }) as never,
   remove: async () => true,
+  resolve: async (host) =>
+    host === "status.acme.com"
+      ? { organizationId: "org_demo", statusPageId: "page_1", domain: "status.acme.com" }
+      : null,
 };
 
 const BASE = "/v1/organizations/org_demo/custom-domains";
@@ -308,5 +318,87 @@ describe("custom domains routes RBAC", () => {
   it("developer can delete (204)", async () => {
     const res = await request(app("developer")).delete(`${BASE}/cd_1`).set("x-test-user", "u1");
     expect(res.status).toBe(204);
+  });
+});
+
+// ── Service: resolution (host → status page) ─────────────────────────────────
+
+describe("custom domain service — resolve", () => {
+  async function setup(verify: boolean) {
+    const { prisma } = fakePrisma();
+    const dns = fakeDns();
+    const svc = makeService(dns.resolver, prisma);
+    const d = await svc.create("org_1", { statusPageId: "page_1", domain: "status.acme.com" }, actor);
+    if (verify) {
+      dns.txt["_uptimeflow-challenge.status.acme.com"] = [[d.dns.txtRecord.value]];
+      await svc.verify("org_1", d.id);
+    }
+    return { svc, d };
+  }
+
+  it("resolves a VERIFIED domain to its org + status page", async () => {
+    const { svc } = await setup(true);
+    const r = await svc.resolve("status.acme.com");
+    expect(r).toEqual({ organizationId: "org_1", statusPageId: "page_1", domain: "status.acme.com" });
+  });
+
+  it("normalizes the inbound host before resolving", async () => {
+    const { svc } = await setup(true);
+    expect(await svc.resolve("HTTPS://Status.Acme.com/")).not.toBeNull();
+  });
+
+  it("returns null for an unverified domain", async () => {
+    const { svc } = await setup(false);
+    expect(await svc.resolve("status.acme.com")).toBeNull();
+  });
+
+  it("returns null for an unknown or invalid host", async () => {
+    const { svc } = await setup(true);
+    expect(await svc.resolve("nope.example.com")).toBeNull();
+    expect(await svc.resolve("not a domain")).toBeNull();
+  });
+
+  it("returns null after the domain is soft-deleted", async () => {
+    const { svc, d } = await setup(true);
+    await svc.remove("org_1", d.id, actor);
+    expect(await svc.resolve("status.acme.com")).toBeNull();
+  });
+});
+
+// ── Edge endpoints: TLS authorize + public resolve (unauthenticated) ─────────
+
+describe("domain resolution edge endpoints", () => {
+  const edgeApp = buildServer({
+    prisma: prismaWithRole("viewer"),
+    getSession: headerGetSession,
+    services: { customDomains: fakeService },
+  });
+
+  it("TLS authorize returns 200 for a verified domain (Caddy ask)", async () => {
+    const res = await request(edgeApp).get("/v1/internal/tls/authorize?domain=status.acme.com");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ authorized: true });
+  });
+
+  it("TLS authorize returns 403 for an unknown/unverified domain", async () => {
+    const res = await request(edgeApp).get("/v1/internal/tls/authorize?domain=evil.example.com");
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ authorized: false });
+  });
+
+  it("TLS authorize is reachable without authentication", async () => {
+    const res = await request(edgeApp).get("/v1/internal/tls/authorize?domain=status.acme.com");
+    expect(res.status).not.toBe(401);
+  });
+
+  it("public resolve returns the status page for a verified host", async () => {
+    const res = await request(edgeApp).get("/v1/public/status-pages/resolve?host=status.acme.com");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ organizationId: "org_demo", statusPageId: "page_1" });
+  });
+
+  it("public resolve 404s for an unknown host", async () => {
+    const res = await request(edgeApp).get("/v1/public/status-pages/resolve?host=nope.example.com");
+    expect(res.status).toBe(404);
   });
 });

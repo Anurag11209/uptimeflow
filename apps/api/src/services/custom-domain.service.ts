@@ -55,9 +55,22 @@ export interface ListQuery {
   cursor?: string;
 }
 
+export interface ResolvedDomain {
+  organizationId: string;
+  statusPageId: string;
+  domain: string;
+}
+
 export interface CustomDomainService {
   list(organizationId: string, query: ListQuery): Promise<Page<CustomDomainSummary>>;
   get(organizationId: string, id: string): Promise<CustomDomainSummary | null>;
+  /**
+   * Resolve an inbound hostname to its status page. Returns null for unknown,
+   * unverified, or soft-deleted domains — the caller (edge serving / TLS
+   * authorize) must treat null as "reject". Not org-scoped: it IS the lookup
+   * that establishes the tenant from the hostname.
+   */
+  resolve(host: string): Promise<ResolvedDomain | null>;
   create(
     organizationId: string,
     input: CreateCustomDomainInput,
@@ -157,6 +170,18 @@ export function createCustomDomainService(deps: CustomDomainServiceDeps): Custom
         select: SELECT,
       })) as Row | null;
       return row ? toSummary(row) : null;
+    },
+
+    async resolve(host) {
+      const domain = normalizeDomain(host);
+      if (!domain) return null;
+      const row = await prisma.customDomain.findFirst({
+        where: { domain, verificationStatus: "VERIFIED", deletedAt: null },
+        select: { organizationId: true, statusPageId: true, domain: true },
+      });
+      return row
+        ? { organizationId: row.organizationId, statusPageId: row.statusPageId, domain: row.domain }
+        : null;
     },
 
     async create(organizationId, input, actor) {
