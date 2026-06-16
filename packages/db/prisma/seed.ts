@@ -12,9 +12,134 @@
  * Idempotent: safe to run repeatedly.
  */
 import { randomUUID } from "node:crypto";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type PlanTier, type Prisma } from "@prisma/client";
 
 const prisma = new PrismaClient();
+
+/**
+ * Plan catalog — seeded as DATA (single source of truth for limits & flags).
+ * null limit = unlimited. Stripe price/product ids are read from the
+ * environment when present (so the catalog matches the Stripe dashboard
+ * without hardcoding ids), otherwise left null until configured. ENTERPRISE is
+ * flag-only (isPublic=false): no self-serve checkout, limits negotiated.
+ */
+const PLANS: Array<{
+  tier: PlanTier;
+  name: string;
+  description: string;
+  priceCents: number;
+  monitorLimit: number | null;
+  seatLimit: number | null;
+  statusPageLimit: number | null;
+  smsEnabled: boolean;
+  voiceEnabled: boolean;
+  ssoEnabled: boolean;
+  advancedAnalytics: boolean;
+  meteredAllowances: Prisma.InputJsonValue;
+  isPublic: boolean;
+  sortOrder: number;
+}> = [
+  {
+    tier: "FREE",
+    name: "Free",
+    description: "10 monitors, 1 seat, 1 status page.",
+    priceCents: 0,
+    monitorLimit: 10,
+    seatLimit: 1,
+    statusPageLimit: 1,
+    smsEnabled: false,
+    voiceEnabled: false,
+    ssoEnabled: false,
+    advancedAnalytics: false,
+    meteredAllowances: { sms: 0, voice_minutes: 0 },
+    isPublic: true,
+    sortOrder: 0,
+  },
+  {
+    tier: "STARTER",
+    name: "Starter",
+    description: "50 monitors, 5 seats, Slack/Discord/Webhooks.",
+    priceCents: 2900,
+    monitorLimit: 50,
+    seatLimit: 5,
+    statusPageLimit: 1,
+    smsEnabled: false,
+    voiceEnabled: false,
+    ssoEnabled: false,
+    advancedAnalytics: false,
+    meteredAllowances: { sms: 0, voice_minutes: 0 },
+    isPublic: true,
+    sortOrder: 1,
+  },
+  {
+    tier: "GROWTH",
+    name: "Growth",
+    description: "250 monitors, 20 seats, SMS alerts, multiple status pages.",
+    priceCents: 9900,
+    monitorLimit: 250,
+    seatLimit: 20,
+    statusPageLimit: 10,
+    smsEnabled: true,
+    voiceEnabled: false,
+    ssoEnabled: false,
+    advancedAnalytics: false,
+    meteredAllowances: { sms: 500, voice_minutes: 0 },
+    isPublic: true,
+    sortOrder: 2,
+  },
+  {
+    tier: "BUSINESS",
+    name: "Business",
+    description: "Unlimited monitors, voice calls, advanced analytics, SSO.",
+    priceCents: 29900,
+    monitorLimit: null,
+    seatLimit: null,
+    statusPageLimit: null,
+    smsEnabled: true,
+    voiceEnabled: true,
+    ssoEnabled: true,
+    advancedAnalytics: true,
+    meteredAllowances: { sms: 2000, voice_minutes: 200 },
+    isPublic: true,
+    sortOrder: 3,
+  },
+  {
+    tier: "ENTERPRISE",
+    name: "Enterprise",
+    description: "Custom limits, SSO, voice, advanced analytics. Contact sales.",
+    priceCents: 0,
+    monitorLimit: null,
+    seatLimit: null,
+    statusPageLimit: null,
+    smsEnabled: true,
+    voiceEnabled: true,
+    ssoEnabled: true,
+    advancedAnalytics: true,
+    meteredAllowances: {},
+    isPublic: false,
+    sortOrder: 4,
+  },
+];
+
+/** Optional per-tier Stripe ids from env, e.g. STRIPE_PRICE_GROWTH / STRIPE_PRODUCT_GROWTH. */
+function stripeIds(tier: PlanTier): { stripePriceId: string | null; stripeProductId: string | null } {
+  return {
+    stripePriceId: process.env[`STRIPE_PRICE_${tier}`] ?? null,
+    stripeProductId: process.env[`STRIPE_PRODUCT_${tier}`] ?? null,
+  };
+}
+
+async function seedPlans(): Promise<void> {
+  for (const plan of PLANS) {
+    const ids = stripeIds(plan.tier);
+    await prisma.billingPlan.upsert({
+      where: { tier: plan.tier },
+      update: { ...plan, ...ids },
+      create: { ...plan, ...ids },
+    });
+  }
+  console.log(`Seeded ${PLANS.length} billing plans.`);
+}
 
 const DEMO_ORG = { id: "org_demo", name: "Acme Status", slug: "acme-status" };
 
@@ -27,10 +152,27 @@ const DEMO_USERS: { id: string; name: string; email: string; role: string }[] = 
 ];
 
 async function main(): Promise<void> {
+  await seedPlans();
+
   await prisma.organization.upsert({
     where: { id: DEMO_ORG.id },
     update: { name: DEMO_ORG.name, slug: DEMO_ORG.slug },
     create: { ...DEMO_ORG, createdAt: new Date() },
+  });
+
+  // Give the demo org a FREE subscription linked to the catalog row so the
+  // billing dashboard has something to render out of the box.
+  const freePlan = await prisma.billingPlan.findUnique({ where: { tier: "FREE" } });
+  await prisma.subscription.upsert({
+    where: { organizationId: DEMO_ORG.id },
+    update: { planId: freePlan?.id ?? null },
+    create: {
+      organizationId: DEMO_ORG.id,
+      plan: "FREE",
+      status: "ACTIVE",
+      planId: freePlan?.id ?? null,
+      seats: 1,
+    },
   });
 
   for (const user of DEMO_USERS) {
