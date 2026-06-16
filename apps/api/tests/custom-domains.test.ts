@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import request from "supertest";
+import { AppError } from "@backend-uptime/shared";
 import { Prisma, type PrismaClient } from "@backend-uptime/db";
 import {
   createCustomDomainService,
@@ -155,6 +156,33 @@ describe("custom domain service — create", () => {
     await expect(
       svc.create("org_1", { statusPageId: "page_1", domain: "status.acme.com" }, actor),
     ).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it("blocks creation with a 402 when the plan gate rejects (over-plan)", async () => {
+    const { prisma } = fakePrisma();
+    const svc = createCustomDomainService({
+      prisma,
+      dns: fakeDns().resolver,
+      cnameTarget: "cname.uptimeflow.app",
+      assertCanUseCustomDomains: async () => {
+        throw AppError.paymentRequired("Custom domains require an upgrade.");
+      },
+    });
+    await expect(
+      svc.create("org_1", { statusPageId: "page_1", domain: "status.acme.com" }, actor),
+    ).rejects.toMatchObject({ code: "payment_required", status: 402 });
+  });
+
+  it("allows creation when the plan gate passes", async () => {
+    const { prisma } = fakePrisma();
+    const svc = createCustomDomainService({
+      prisma,
+      dns: fakeDns().resolver,
+      cnameTarget: "cname.uptimeflow.app",
+      assertCanUseCustomDomains: async () => {}, // allowed
+    });
+    const d = await svc.create("org_1", { statusPageId: "page_1", domain: "status.acme.com" }, actor);
+    expect(d.domain).toBe("status.acme.com");
   });
 });
 

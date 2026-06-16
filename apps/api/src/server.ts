@@ -122,6 +122,9 @@ export function createServer(deps: ServerDeps): Express {
         prisma: deps.prisma,
         auditLogs,
         cnameTarget: deps.env.CUSTOM_DOMAIN_CNAME_TARGET,
+        // Plan gate (Phase 11D): block over-plan creates with a typed 402,
+        // reusing the Phase 10 capability mechanism (no parallel gate).
+        assertCanUseCustomDomains: (orgId) => planLimits.assertCapability(orgId, "customDomains"),
       }),
   };
 

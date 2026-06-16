@@ -5,7 +5,7 @@ import type { PrismaClient, PlanTier } from "@backend-uptime/db";
 export type LimitedResource = "monitor" | "seat" | "statusPage";
 
 /** Boolean plan capabilities (forward-looking metered channels gate on these). */
-export type Capability = "sms" | "voice" | "sso" | "advancedAnalytics";
+export type Capability = "sms" | "voice" | "sso" | "advancedAnalytics" | "customDomains";
 
 export interface EffectiveLimits {
   tier: PlanTier;
@@ -17,6 +17,7 @@ export interface EffectiveLimits {
   voiceEnabled: boolean;
   ssoEnabled: boolean;
   advancedAnalytics: boolean;
+  customDomainsEnabled: boolean;
   /** Included metered units per metric, e.g. { sms: 500, voice_minutes: 0 }. */
   meteredAllowances: Record<string, number>;
 }
@@ -51,6 +52,7 @@ const FREE_FALLBACK: EffectiveLimits = {
   voiceEnabled: false,
   ssoEnabled: false,
   advancedAnalytics: false,
+  customDomainsEnabled: false,
   meteredAllowances: { sms: 0, voice_minutes: 0 },
 };
 
@@ -65,6 +67,7 @@ const CAPABILITY_LABEL: Record<Capability, string> = {
   voice: "voice calls",
   sso: "SSO",
   advancedAnalytics: "advanced analytics",
+  customDomains: "custom domains",
 };
 
 export interface PlanLimitsService {
@@ -103,6 +106,7 @@ export function createPlanLimitsService(deps: { prisma: PrismaClient }): PlanLim
       voiceEnabled: plan.voiceEnabled,
       ssoEnabled: plan.ssoEnabled,
       advancedAnalytics: plan.advancedAnalytics,
+      customDomainsEnabled: plan.customDomainsEnabled,
       meteredAllowances: (plan.meteredAllowances as Record<string, number> | null) ?? {},
     };
   }
@@ -152,7 +156,9 @@ export function createPlanLimitsService(deps: { prisma: PrismaClient }): PlanLim
           ? limits.voiceEnabled
           : capability === "sso"
             ? limits.ssoEnabled
-            : limits.advancedAnalytics;
+            : capability === "customDomains"
+              ? limits.customDomainsEnabled
+              : limits.advancedAnalytics;
     if (!enabled) {
       throw AppError.paymentRequired(
         `${CAPABILITY_LABEL[capability]} is not included in your ${limits.planName} plan. ` +
