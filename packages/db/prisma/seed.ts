@@ -40,6 +40,7 @@ const PLANS: Array<{
   voiceEnabled: boolean;
   ssoEnabled: boolean;
   advancedAnalytics: boolean;
+  customDomainsEnabled: boolean;
   meteredAllowances: Prisma.InputJsonValue;
   isPublic: boolean;
   sortOrder: number;
@@ -56,6 +57,7 @@ const PLANS: Array<{
     voiceEnabled: false,
     ssoEnabled: false,
     advancedAnalytics: false,
+    customDomainsEnabled: false,
     meteredAllowances: { sms: 0, voice_minutes: 0 },
     isPublic: true,
     sortOrder: 0,
@@ -72,6 +74,7 @@ const PLANS: Array<{
     voiceEnabled: false,
     ssoEnabled: false,
     advancedAnalytics: false,
+    customDomainsEnabled: false,
     meteredAllowances: { sms: 0, voice_minutes: 0 },
     isPublic: true,
     sortOrder: 1,
@@ -88,6 +91,7 @@ const PLANS: Array<{
     voiceEnabled: false,
     ssoEnabled: false,
     advancedAnalytics: false,
+    customDomainsEnabled: true,
     meteredAllowances: { sms: 500, voice_minutes: 0 },
     isPublic: true,
     sortOrder: 2,
@@ -104,6 +108,7 @@ const PLANS: Array<{
     voiceEnabled: true,
     ssoEnabled: true,
     advancedAnalytics: true,
+    customDomainsEnabled: true,
     meteredAllowances: { sms: 2000, voice_minutes: 200 },
     isPublic: true,
     sortOrder: 3,
@@ -120,6 +125,7 @@ const PLANS: Array<{
     voiceEnabled: true,
     ssoEnabled: true,
     advancedAnalytics: true,
+    customDomainsEnabled: true,
     meteredAllowances: {},
     isPublic: false,
     sortOrder: 4,

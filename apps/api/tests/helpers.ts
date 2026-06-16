@@ -16,6 +16,7 @@ export const testEnv = {
   EMAIL_PROVIDER: "smtp",
   EMAIL_FROM: "test@test.local",
   SMTP_URL: "smtp://localhost:1025",
+  CUSTOM_DOMAIN_CNAME_TARGET: "cname.uptimeflow.app",
   RATE_LIMIT_POINTS: 120,
   RATE_LIMIT_WINDOW_SECONDS: 60,
   OTEL_SERVICE_NAME: "api-test",

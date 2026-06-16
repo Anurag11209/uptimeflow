@@ -44,6 +44,10 @@ const schema = z
     STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
     STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+    // Custom domains (Phase 11): the edge hostname customers CNAME their
+    // status-page domain to. SSL is issued at that edge (Caddy on-demand TLS).
+    CUSTOM_DOMAIN_CNAME_TARGET: z.string().min(1).default("cname.uptimeflow.app"),
+
     RATE_LIMIT_POINTS: z.coerce.number().int().min(1).default(120),
     RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).default(60),
 

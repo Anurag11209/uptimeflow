@@ -19,6 +19,7 @@ const GROWTH = {
   voiceEnabled: false,
   ssoEnabled: false,
   advancedAnalytics: false,
+  customDomainsEnabled: true,
   meteredAllowances: { sms: 500, voice_minutes: 0 },
 };
 const FREE = {
@@ -32,6 +33,7 @@ const FREE = {
   voiceEnabled: false,
   ssoEnabled: false,
   advancedAnalytics: false,
+  customDomainsEnabled: false,
   meteredAllowances: { sms: 0, voice_minutes: 0 },
 };
 
@@ -118,6 +120,21 @@ describe("plan limits service", () => {
       prisma: fakePrisma({ subscription: { plan: "GROWTH", billingPlan: GROWTH } }),
     });
     await expect(svc.assertCapability("org_1", "sms")).resolves.toBeUndefined();
+  });
+
+  it("custom domains: blocked on FREE, allowed on GROWTH", async () => {
+    const free = createPlanLimitsService({
+      prisma: fakePrisma({ subscription: { plan: "FREE", billingPlan: FREE } }),
+    });
+    await expect(free.assertCapability("org_1", "customDomains")).rejects.toMatchObject({
+      code: "payment_required",
+      status: 402,
+    });
+    const growth = createPlanLimitsService({
+      prisma: fakePrisma({ subscription: { plan: "GROWTH", billingPlan: GROWTH } }),
+    });
+    await expect(growth.assertCapability("org_1", "customDomains")).resolves.toBeUndefined();
+    expect((await growth.getEffectiveLimits("org_1")).customDomainsEnabled).toBe(true);
   });
 
   it("getSummary reports usage, remaining, and metered allowances", async () => {
