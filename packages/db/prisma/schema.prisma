@@ -164,6 +164,7 @@ model Organization {
   escalationPolicies     EscalationPolicy[]
   onCallSchedules        OnCallSchedule[]
   statusPages            StatusPage[]
+  customDomains          CustomDomain[]
   subscription           Subscription?
   usageRecords           UsageRecord[]
   invoiceEvents          InvoiceEvent[]
@@ -843,10 +844,11 @@ model StatusPage {
   updatedAt      DateTime             @updatedAt
   deletedAt      DateTime?
 
-  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  components   StatusPageComponent[]
-  incidents    StatusPageIncident[]
-  subscribers  StatusPageSubscriber[]
+  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  components    StatusPageComponent[]
+  incidents     StatusPageIncident[]
+  subscribers   StatusPageSubscriber[]
+  customDomains CustomDomain[]
 
   @@index([organizationId, deletedAt])
   @@map("status_pages")
@@ -922,6 +924,62 @@ model StatusPageSubscriber {
   @@map("status_page_subscribers")
 }
 
+// ════════════ 9b · CUSTOM DOMAINS (Phase 11) ═══════════════════════════════
+//  Lets a customer serve their status page on their own hostname
+//  (status.acme.com). Ownership is proven by a DNS TXT challenge; routing is a
+//  CNAME to our edge. SSL is issued at the edge (Caddy on-demand TLS) once a
+//  domain is VERIFIED — the `/v1/internal/tls/authorize` endpoint is the gate.
+//  Control-plane conventions: uuid(7) PK, org tenancy, soft delete + actor
+//  columns. The legacy StatusPage.customDomain column is left untouched; this
+//  table is the source of truth for the verification/SSL lifecycle.
+
+enum DomainVerificationStatus {
+  PENDING // token issued, awaiting a matching DNS record
+  VERIFIED // DNS TXT challenge observed and matched
+  FAILED // checked but the record was wrong/absent (still retryable)
+}
+
+enum DomainSslStatus {
+  PENDING // no cert yet (issued at the edge after verification)
+  ACTIVE // a valid cert is serving this hostname
+  FAILED // issuance failed (e.g. CAA blocked, rate limited)
+}
+
+model CustomDomain {
+  id             String @id @default(uuid(7)) @db.Uuid
+  organizationId String
+  statusPageId   String @db.Uuid
+
+  // Fully-qualified hostname, normalized to lowercase, no trailing dot.
+  // Globally unique: a hostname can map to exactly one status page.
+  domain String @unique
+
+  verificationStatus DomainVerificationStatus @default(PENDING)
+  // Random per-domain secret placed in the DNS TXT challenge record.
+  verificationToken  String
+  sslStatus          DomainSslStatus          @default(PENDING)
+
+  verifiedAt     DateTime?
+  lastCheckedAt  DateTime?
+  // Human-readable reason the last check did not verify (NXDOMAIN, mismatch…).
+  lastCheckError String?
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  statusPage   StatusPage   @relation(fields: [statusPageId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, deletedAt])
+  @@index([statusPageId])
+  @@index([verificationStatus])
+  @@map("custom_domains")
+}
+
 // ════════════ 10 · BILLING (Phase 9) ═══════════════════════════════════════
 
 enum PlanTier {
@@ -974,10 +1032,12 @@ model BillingPlan {
   statusPageLimit Int?
 
   // Capability flags (the forward-looking metered channels gate on these).
-  smsEnabled        Boolean @default(false)
-  voiceEnabled      Boolean @default(false)
-  ssoEnabled        Boolean @default(false)
-  advancedAnalytics Boolean @default(false)
+  smsEnabled         Boolean @default(false)
+  voiceEnabled       Boolean @default(false)
+  ssoEnabled         Boolean @default(false)
+  advancedAnalytics  Boolean @default(false)
+  // Custom domains for status pages (Phase 11) — gated like the other flags.
+  customDomainsEnabled Boolean @default(false)
 
   // Included metered allowances per unit, e.g. { "sms": 0, "voice_minutes": 0 }.
   // Generic by design so SMS/voice/checks all read from the same place later.
