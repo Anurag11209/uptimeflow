@@ -166,6 +166,7 @@ model Organization {
   statusPages            StatusPage[]
   subscription           Subscription?
   usageRecords           UsageRecord[]
+  invoiceEvents          InvoiceEvent[]
   apiKeys                ApiKey[]
   webhooks               Webhook[]
   ssoConnections         SsoConnection[]
@@ -926,7 +927,7 @@ model StatusPageSubscriber {
 enum PlanTier {
   FREE
   STARTER
-  PRO
+  GROWTH
   BUSINESS
   ENTERPRISE
 }
@@ -940,15 +941,74 @@ enum SubscriptionStatus {
   INCOMPLETE
 }
 
+enum InvoiceEventType {
+  CHECKOUT_COMPLETED
+  SUBSCRIPTION_CREATED
+  SUBSCRIPTION_UPDATED
+  SUBSCRIPTION_DELETED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+}
+
+/// Plan catalog — seeded as DATA, not hardcoded logic. One row per PlanTier is
+/// the single source of truth for limits and feature flags consumed by the
+/// feature-gating layer (packages/billing reads these, the API enforces them).
+/// Limits are nullable: null = unlimited (e.g. BUSINESS monitors). Stripe price
+/// linkage is nullable too (FREE has no price; ENTERPRISE is a flag-only,
+/// sales-led tier with `isPublic = false`).
+model BillingPlan {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  tier        PlanTier @unique
+  name        String // display name, e.g. "Growth"
+  description String?
+
+  // Stripe linkage (set once the price exists in the Stripe dashboard).
+  stripeProductId String?
+  stripePriceId   String? @unique
+  priceCents      Int     @default(0) // monthly price in the smallest currency unit
+  currency        String  @default("usd")
+
+  // Hard limits. null = unlimited. These are what the gating layer enforces.
+  monitorLimit    Int?
+  seatLimit       Int?
+  statusPageLimit Int?
+
+  // Capability flags (the forward-looking metered channels gate on these).
+  smsEnabled        Boolean @default(false)
+  voiceEnabled      Boolean @default(false)
+  ssoEnabled        Boolean @default(false)
+  advancedAnalytics Boolean @default(false)
+
+  // Included metered allowances per unit, e.g. { "sms": 0, "voice_minutes": 0 }.
+  // Generic by design so SMS/voice/checks all read from the same place later.
+  meteredAllowances Json?
+
+  // ENTERPRISE is flag-only (not self-serve checkout); isPublic hides it from
+  // the public pricing/upgrade UI. sortOrder drives display order.
+  isPublic  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@index([tier])
+  @@map("billing_plans")
+}
+
 model Subscription {
   id                   String             @id @default(uuid(7)) @db.Uuid
   organizationId       String             @unique // one subscription per org
+  // FK to the catalog row that supplies limits/flags (SetNull if a plan is
+  // retired). `plan` mirrors the tier denormalized for cheap reads/filters.
+  planId               String?            @db.Uuid
   plan                 PlanTier           @default(FREE)
   status               SubscriptionStatus @default(TRIALING)
   stripeCustomerId     String?            @unique
   stripeSubscriptionId String?            @unique
+  stripePriceId        String? // the active Stripe price (mirrors BillingPlan)
   seats                Int                @default(1)
-  monitorLimit         Int? // null = plan default / unlimited
+  monitorLimit         Int? // per-subscription override; null = plan default / unlimited
   trialEndsAt          DateTime?
   currentPeriodEnd     DateTime?
   cancelAtPeriodEnd    Boolean            @default(false)
@@ -956,13 +1016,19 @@ model Subscription {
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingPlan   BillingPlan?   @relation(fields: [planId], references: [id], onDelete: SetNull)
+  invoiceEvents InvoiceEvent[]
 
   @@index([status])
+  @@index([planId])
   @@map("subscriptions")
 }
 
 /// Metered usage events for billing (checks run, SMS sent, etc.). Append-only.
+/// Deliberately generic — `metric` + `quantity` + period — so SMS, voice
+/// minutes, and checks all record against ONE table (see ADR: forward-looking
+/// metering). Indexed by (org, metric, period) for fast per-period rollups.
 model UsageRecord {
   id             String   @id @default(uuid(7)) @db.Uuid
   organizationId String
@@ -976,6 +1042,40 @@ model UsageRecord {
 
   @@index([organizationId, metric, periodStart])
   @@map("usage_records")
+}
+
+/// Append-only ledger of processed Stripe webhook events. The unique
+/// `stripeEventId` is what makes webhook handling idempotent: a replayed event
+/// collides on insert and is skipped — the same DB-enforced dedupe pattern as
+/// IntegrationDelivery.dedupeKey. Payment rows double as the org's billing
+/// history (amount, status, hosted invoice URL) for the dashboard.
+model InvoiceEvent {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  organizationId String
+  subscriptionId String?          @db.Uuid
+  stripeEventId  String           @unique // evt_… — idempotency key
+  type           InvoiceEventType
+
+  // Invoice/payment detail (present for PAYMENT_* events).
+  stripeInvoiceId  String?
+  amountCents      Int?
+  currency         String?
+  status           String? // raw Stripe invoice/subscription status
+  hostedInvoiceUrl String?
+  invoicePdfUrl    String?
+  periodStart      DateTime?
+  periodEnd        DateTime?
+
+  // Raw event snapshot for forensics/replay (no FK — survives org/sub changes).
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([subscriptionId])
+  @@map("invoice_events")
 }
 
 // ════════════ 11 · DEVELOPER PLATFORM & SSO (Phase 9) ══════════════════════

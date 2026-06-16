@@ -21,6 +21,16 @@ export const AUDIT_ACTIONS = [
   "incident.acknowledged",
   "incident.resolved",
   "incident.commented",
+  "billing.checkout_started",
+  "billing.portal_opened",
+  "billing.plan_changed",
+  "billing.canceled",
+  "billing.checkout_completed",
+  "billing.subscription_created",
+  "billing.subscription_updated",
+  "billing.subscription_deleted",
+  "billing.payment_succeeded",
+  "billing.payment_failed",
 ] as const;
 
 export type KnownAuditAction = (typeof AUDIT_ACTIONS)[number];
