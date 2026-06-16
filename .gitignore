@@ -9,3 +9,20 @@ coverage/
 !.env.example
 .DS_Store
 *.log
+
+# Secrets & credentials — never commit
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cert
+*.keystore
+id_rsa
+id_rsa.*
+.aws/
+aws-credentials*
+credentials
+credentials.*
+*.secret
+secrets.*
