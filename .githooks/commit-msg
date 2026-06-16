@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# commit-msg hook — strip AI co-author / attribution trailers from the message.
+#
+# It NEVER blocks a commit. It rewrites the message file in place, removing only
+# the offending lines and leaving the rest of the message intact. Idempotent and
+# generator-agnostic: works no matter what produced the commit (CLI, IDE, an AI
+# tool, a merge, etc.), as long as the repo's core.hooksPath points at .githooks
+# (see .githooks/README.md to enable).
+#
+# Lines removed (all case-insensitive):
+#   1. Co-authored-by: trailers naming an AI tool
+#        (claude | anthropic | copilot | openai | ai assistant)
+#   2. Generated-by: trailers naming claude / anthropic
+#   3. Standalone "Claude Code" / "Anthropic" attribution lines
+#   4. The "Generated with [Claude Code]" / "Generated with Anthropic" trailer
+#
+set -euo pipefail
+
+msg_file="$1"
+[ -f "$msg_file" ] || exit 0
+
+tmp="$(mktemp)"
+
+# Drop offending lines. Multiple -e patterns are OR'd; -v keeps the rest.
+# grep exits 1 when every line is filtered out (empty result) — tolerate it.
+grep -ivE \
+  -e '^[[:space:]]*co-authored-by:.*(claude|anthropic|copilot|openai|ai assistant)' \
+  -e '^[[:space:]]*generated-by:.*(claude|anthropic)' \
+  -e '^[[:space:]]*(claude code|anthropic)[[:space:]]*$' \
+  -e 'generated with[[:space:]]+\[?(claude code|anthropic)' \
+  "$msg_file" > "$tmp" || true
+
+# Collapse blank lines left dangling at the end after a trailer was removed.
+# (Buffer blank lines; only emit them when a non-blank line follows.)
+awk 'NF {while (blank-- > 0) print ""; blank=0; print; next} {blank++}' \
+  "$tmp" > "$msg_file"
+
+rm -f "$tmp"
+exit 0
