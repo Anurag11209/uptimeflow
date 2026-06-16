@@ -43,6 +43,11 @@ import { createMemberService, type MemberService } from "./services/member.servi
 import { createOnCallScheduleService, type OnCallScheduleService } from "./services/oncall.service.js";
 import { createOrgStatsService, type OrgStatsService } from "./services/org-stats.service.js";
 import type { BillingWebhookService } from "./services/billing-webhook.service.js";
+import { customDomainsRouter } from "./routes/custom-domains.js";
+import {
+  createCustomDomainService,
+  type CustomDomainService,
+} from "./services/custom-domain.service.js";
 import { metricsMiddleware, type Logger, type Metrics } from "./telemetry.js";
 
 export interface ServerServices {
@@ -56,6 +61,7 @@ export interface ServerServices {
   billingWebhooks: BillingWebhookService;
   planLimits: PlanLimitsService;
   billing: BillingService;
+  customDomains: CustomDomainService;
 }
 
 export interface ServerDeps {
@@ -108,6 +114,13 @@ export function createServer(deps: ServerDeps): Express {
         provider: deps.billingProvider,
         webUrl: deps.env.WEB_URL,
         auditLogs,
+      }),
+    customDomains:
+      deps.services?.customDomains ??
+      createCustomDomainService({
+        prisma: deps.prisma,
+        auditLogs,
+        cnameTarget: deps.env.CUSTOM_DOMAIN_CNAME_TARGET,
       }),
   };
 
@@ -204,6 +217,11 @@ export function createServer(deps: ServerDeps): Express {
     "/organizations/:organizationId/billing",
     authn,
     billingRouter({ prisma: deps.prisma, billing: services.billing }),
+  );
+  v1.use(
+    "/organizations/:organizationId/custom-domains",
+    authn,
+    customDomainsRouter({ prisma: deps.prisma, service: services.customDomains }),
   );
   v1.use(
     "/organizations/:organizationId",
