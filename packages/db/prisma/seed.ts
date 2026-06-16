@@ -11,10 +11,15 @@
  *
  * Idempotent: safe to run repeatedly.
  */
+import "dotenv/config";
+
 import { randomUUID } from "node:crypto";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type PlanTier, type Prisma } from "@prisma/client";
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+});
 
 /**
  * Plan catalog — seeded as DATA (single source of truth for limits & flags).
