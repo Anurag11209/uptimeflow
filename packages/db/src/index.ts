@@ -1,3 +1,4 @@
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
 // Re-export the Prisma namespace as a value (not `export type`): it carries
@@ -18,8 +19,11 @@ export interface CreatePrismaOptions {
  * once at bootstrap; serverless-style reuse is also safe via the module cache.
  */
 export function createPrisma(options: CreatePrismaOptions = {}): PrismaClient {
+  // Prisma 7 connects through a driver adapter instead of a schema `url`.
+  const connectionString = options.databaseUrl ?? process.env.DATABASE_URL;
+  const adapter = new PrismaPg({ connectionString });
   return new PrismaClient({
-    datasources: options.databaseUrl ? { db: { url: options.databaseUrl } } : undefined,
+    adapter,
     log: options.logQueries
       ? [
           { level: "query", emit: "stdout" },

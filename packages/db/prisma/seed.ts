@@ -11,10 +11,15 @@
  *
  * Idempotent: safe to run repeatedly.
  */
+import "dotenv/config";
+
 import { randomUUID } from "node:crypto";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+});
 
 const DEMO_ORG = { id: "org_demo", name: "Acme Status", slug: "acme-status" };
 
