@@ -26,6 +26,9 @@ importers:
       '@backend-uptime/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@backend-uptime/billing':
+        specifier: workspace:*
+        version: link:../../packages/billing
       '@backend-uptime/config':
         specifier: workspace:*
         version: link:../../packages/config
