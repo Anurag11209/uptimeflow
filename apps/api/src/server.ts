@@ -50,7 +50,11 @@ import {
   type CustomDomainService,
 } from "./services/custom-domain.service.js";
 import { statusPagesRouter } from "./routes/status-pages.js";
-import { createStatusPageService, type StatusPageService } from "./services/status-page.service.js";
+import {
+  createStatusPageService,
+  type StatusPageService,
+  type StatusNotifier,
+} from "./services/status-page.service.js";
 import { metricsMiddleware, type Logger, type Metrics } from "./telemetry.js";
 
 export interface ServerServices {
@@ -85,6 +89,8 @@ export interface ServerDeps {
   integrationDispatcher?: IntegrationDispatcher;
   /** Stripe provider for webhook verification; absent when billing is unconfigured. */
   billingProvider?: BillingProvider;
+  /** Sends status-page subscriber emails; absent = no subscriber email (tests/dev). */
+  statusNotifier?: StatusNotifier;
   /** Override services in tests; defaults are built from prisma. */
   services?: Partial<ServerServices>;
 }
@@ -131,8 +137,12 @@ export function createServer(deps: ServerDeps): Express {
       }),
     statusPages:
       deps.services?.statusPages ??
-      // Phase 12: notifier is wired in 12C; absent here means no subscriber email.
-      createStatusPageService({ prisma: deps.prisma, auditLogs, webUrl: deps.env.WEB_URL }),
+      createStatusPageService({
+        prisma: deps.prisma,
+        auditLogs,
+        webUrl: deps.env.WEB_URL,
+        notifier: deps.statusNotifier,
+      }),
   };
 
   const app = express();

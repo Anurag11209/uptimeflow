@@ -111,6 +111,29 @@ export function renderEmail(job: EmailJob): RenderedEmail {
         ),
         text: `${job.pageName} — ${job.incidentTitle}\nStatus: ${job.statusChange}\n\n${job.publicUrl}\n\nYou subscribed to status updates for this page.`,
       };
+    case "status_subscribe_confirm":
+      return {
+        subject: `Confirm your subscription to ${job.pageName}`,
+        html: layout(
+          "Confirm your subscription",
+          `<p style="margin:0;">Confirm that you want status updates for <strong style="color:${BRAND.text};">${escapeHtml(job.pageName)}</strong>. If you didn't request this, ignore this email.</p>${button("Confirm subscription", job.confirmUrl)}`,
+        ),
+        text: `Confirm your subscription to ${job.pageName} status updates:\n${job.confirmUrl}\n\nIf you didn't request this, ignore this email.`,
+      };
+    case "status_incident_opened":
+    case "status_incident_updated":
+    case "status_incident_resolved":
+      return {
+        subject: `${job.pageName}: ${job.incidentTitle} (${job.statusLabel})`,
+        html: layout(
+          escapeHtml(job.incidentTitle),
+          `<p style="margin:0 0 6px;">Update on <strong style="color:${BRAND.text};">${escapeHtml(job.pageName)}</strong>.</p>
+           <p style="margin:0 0 6px;">Status: <span style="font-family:Menlo,Consolas,monospace;color:${BRAND.accent};">${escapeHtml(job.statusLabel)}</span></p>
+           <p style="margin:0;">${escapeHtml(job.body)}</p>${button("View status page", job.publicUrl)}
+           <p style="margin:14px 0 0;color:#5B677C;font-size:12px;">You subscribed to status updates. <a href="${job.unsubscribeUrl}" style="color:#5B677C;">Unsubscribe</a>.</p>`,
+        ),
+        text: `${job.pageName} — ${job.incidentTitle}\nStatus: ${job.statusLabel}\n\n${job.body}\n\n${job.publicUrl}\n\nUnsubscribe: ${job.unsubscribeUrl}`,
+      };
   }
 }
 
