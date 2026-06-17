@@ -25,6 +25,7 @@ interface DomainRow {
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
+  statusPage: { slug: string };
 }
 
 function fakePrisma(opts: { statusPageIds?: string[] } = {}) {
@@ -63,6 +64,7 @@ function fakePrisma(opts: { statusPageIds?: string[] } = {}) {
           createdAt: now,
           updatedAt: now,
           deletedAt: null,
+          statusPage: { slug: "acme-status" },
         };
         rows.set(id, row);
         byDomain.set(domain, id);
@@ -298,7 +300,7 @@ const fakeService: CustomDomainService = {
   remove: async () => true,
   resolve: async (host) =>
     host === "status.acme.com"
-      ? { organizationId: "org_demo", statusPageId: "page_1", domain: "status.acme.com" }
+      ? { organizationId: "org_demo", statusPageId: "page_1", domain: "status.acme.com", slug: "acme-status" }
       : null,
 };
 
@@ -367,7 +369,7 @@ describe("custom domain service — resolve", () => {
   it("resolves a VERIFIED domain to its org + status page", async () => {
     const { svc } = await setup(true);
     const r = await svc.resolve("status.acme.com");
-    expect(r).toEqual({ organizationId: "org_1", statusPageId: "page_1", domain: "status.acme.com" });
+    expect(r).toEqual({ organizationId: "org_1", statusPageId: "page_1", domain: "status.acme.com", slug: "acme-status" });
   });
 
   it("normalizes the inbound host before resolving", async () => {
