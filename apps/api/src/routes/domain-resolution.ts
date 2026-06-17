@@ -49,6 +49,7 @@ export function domainResolutionRouter(deps: DomainResolutionDeps): Router {
       organizationId: resolved.organizationId,
       statusPageId: resolved.statusPageId,
       domain: resolved.domain,
+      slug: resolved.slug,
     });
   });
 

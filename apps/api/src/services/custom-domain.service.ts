@@ -59,6 +59,8 @@ export interface ResolvedDomain {
   organizationId: string;
   statusPageId: string;
   domain: string;
+  /** The status page's slug — lets the edge rewrite host → /status/<slug>. */
+  slug: string;
 }
 
 export interface CustomDomainService {
@@ -177,10 +179,15 @@ export function createCustomDomainService(deps: CustomDomainServiceDeps): Custom
       if (!domain) return null;
       const row = await prisma.customDomain.findFirst({
         where: { domain, verificationStatus: "VERIFIED", deletedAt: null },
-        select: { organizationId: true, statusPageId: true, domain: true },
+        select: { organizationId: true, statusPageId: true, domain: true, statusPage: { select: { slug: true } } },
       });
       return row
-        ? { organizationId: row.organizationId, statusPageId: row.statusPageId, domain: row.domain }
+        ? {
+            organizationId: row.organizationId,
+            statusPageId: row.statusPageId,
+            domain: row.domain,
+            slug: row.statusPage.slug,
+          }
         : null;
     },
 

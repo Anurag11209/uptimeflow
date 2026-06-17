@@ -11,6 +11,7 @@ import type { SessionData } from "./context.js";
 import { createApiRateLimiter } from "./middleware/rate-limit.js";
 import { createServer } from "./server.js";
 import { createAuditLogService } from "./services/audit-log.service.js";
+import { createStatusNotifier } from "./services/status-notifier.js";
 import { createMetrics, type Logger } from "./telemetry.js";
 
 export interface RunningApi {
@@ -35,6 +36,10 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
   });
 
   const auditLogs = createAuditLogService({ prisma, logger });
+
+  // Status-page subscriber emails go through the shared email queue (worker
+  // delivers via SES with the existing retry policy).
+  const statusNotifier = createStatusNotifier({ prisma, emailQueue, webUrl: env.WEB_URL, logger });
 
   // Stripe billing is optional: only wire the provider when fully configured
   // (secret + webhook secret). When absent, the webhook route answers 503 and
@@ -87,6 +92,7 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
     emailProvider,
     integrationDispatcher,
     billingProvider,
+    statusNotifier,
   });
 
   const server = http.createServer(app);

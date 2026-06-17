@@ -49,6 +49,13 @@ import {
   createCustomDomainService,
   type CustomDomainService,
 } from "./services/custom-domain.service.js";
+import { statusPagesRouter } from "./routes/status-pages.js";
+import { statusPagesAuthedRouter } from "./routes/status-pages.authed.js";
+import {
+  createStatusPageService,
+  type StatusPageService,
+  type StatusNotifier,
+} from "./services/status-page.service.js";
 import { metricsMiddleware, type Logger, type Metrics } from "./telemetry.js";
 
 export interface ServerServices {
@@ -63,6 +70,7 @@ export interface ServerServices {
   planLimits: PlanLimitsService;
   billing: BillingService;
   customDomains: CustomDomainService;
+  statusPages: StatusPageService;
 }
 
 export interface ServerDeps {
@@ -82,6 +90,8 @@ export interface ServerDeps {
   integrationDispatcher?: IntegrationDispatcher;
   /** Stripe provider for webhook verification; absent when billing is unconfigured. */
   billingProvider?: BillingProvider;
+  /** Sends status-page subscriber emails; absent = no subscriber email (tests/dev). */
+  statusNotifier?: StatusNotifier;
   /** Override services in tests; defaults are built from prisma. */
   services?: Partial<ServerServices>;
 }
@@ -126,6 +136,14 @@ export function createServer(deps: ServerDeps): Express {
         // reusing the Phase 10 capability mechanism (no parallel gate).
         assertCanUseCustomDomains: (orgId) => planLimits.assertCapability(orgId, "customDomains"),
       }),
+    statusPages:
+      deps.services?.statusPages ??
+      createStatusPageService({
+        prisma: deps.prisma,
+        auditLogs,
+        webUrl: deps.env.WEB_URL,
+        notifier: deps.statusNotifier,
+      }),
   };
 
   const app = express();
@@ -164,6 +182,9 @@ export function createServer(deps: ServerDeps): Express {
   // Edge hostname → status-page resolution (Caddy TLS ask + public renderer).
   // Unauthenticated and unthrottled by design: the hostname is the lookup key.
   app.use(domainResolutionRouter({ service: services.customDomains }));
+  // Public status pages (/status/:slug …). Unauthenticated; the mutating
+  // subscribe/verify/unsubscribe routes carry their own rate limiter.
+  app.use(statusPagesRouter({ statusPages: services.statusPages, rateLimiter: deps.rateLimiter }));
 
   // Versioned REST surface.
   const v1 = Router();
@@ -229,6 +250,11 @@ export function createServer(deps: ServerDeps): Express {
     "/organizations/:organizationId/custom-domains",
     authn,
     customDomainsRouter({ prisma: deps.prisma, service: services.customDomains }),
+  );
+  v1.use(
+    "/organizations/:organizationId/status-pages",
+    authn,
+    statusPagesAuthedRouter({ prisma: deps.prisma, statusPages: services.statusPages }),
   );
   v1.use(
     "/organizations/:organizationId",
