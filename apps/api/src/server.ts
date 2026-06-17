@@ -49,6 +49,8 @@ import {
   createCustomDomainService,
   type CustomDomainService,
 } from "./services/custom-domain.service.js";
+import { statusPagesRouter } from "./routes/status-pages.js";
+import { createStatusPageService, type StatusPageService } from "./services/status-page.service.js";
 import { metricsMiddleware, type Logger, type Metrics } from "./telemetry.js";
 
 export interface ServerServices {
@@ -63,6 +65,7 @@ export interface ServerServices {
   planLimits: PlanLimitsService;
   billing: BillingService;
   customDomains: CustomDomainService;
+  statusPages: StatusPageService;
 }
 
 export interface ServerDeps {
@@ -126,6 +129,10 @@ export function createServer(deps: ServerDeps): Express {
         // reusing the Phase 10 capability mechanism (no parallel gate).
         assertCanUseCustomDomains: (orgId) => planLimits.assertCapability(orgId, "customDomains"),
       }),
+    statusPages:
+      deps.services?.statusPages ??
+      // Phase 12: notifier is wired in 12C; absent here means no subscriber email.
+      createStatusPageService({ prisma: deps.prisma, auditLogs, webUrl: deps.env.WEB_URL }),
   };
 
   const app = express();
@@ -164,6 +171,9 @@ export function createServer(deps: ServerDeps): Express {
   // Edge hostname → status-page resolution (Caddy TLS ask + public renderer).
   // Unauthenticated and unthrottled by design: the hostname is the lookup key.
   app.use(domainResolutionRouter({ service: services.customDomains }));
+  // Public status pages (/status/:slug …). Unauthenticated; the mutating
+  // subscribe/verify/unsubscribe routes carry their own rate limiter.
+  app.use(statusPagesRouter({ statusPages: services.statusPages, rateLimiter: deps.rateLimiter }));
 
   // Versioned REST surface.
   const v1 = Router();
