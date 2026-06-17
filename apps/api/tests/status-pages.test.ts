@@ -177,9 +177,7 @@ describe("public status pages", () => {
 });
 
 // ─────────────────────────── Authed surface ─────────────────────────────────
-// Un-skipped in 12D when the authed CRUD router is mounted; the public surface
-// (above) ships in 12B.
-describe.skip("authed status page CRUD", () => {
+describe("authed status page CRUD", () => {
   it("401s without a session", async () => {
     expect((await request(authedApp("viewer")).get(ORG)).status).toBe(401);
   });

@@ -50,6 +50,7 @@ import {
   type CustomDomainService,
 } from "./services/custom-domain.service.js";
 import { statusPagesRouter } from "./routes/status-pages.js";
+import { statusPagesAuthedRouter } from "./routes/status-pages.authed.js";
 import {
   createStatusPageService,
   type StatusPageService,
@@ -249,6 +250,11 @@ export function createServer(deps: ServerDeps): Express {
     "/organizations/:organizationId/custom-domains",
     authn,
     customDomainsRouter({ prisma: deps.prisma, service: services.customDomains }),
+  );
+  v1.use(
+    "/organizations/:organizationId/status-pages",
+    authn,
+    statusPagesAuthedRouter({ prisma: deps.prisma, statusPages: services.statusPages }),
   );
   v1.use(
     "/organizations/:organizationId",
