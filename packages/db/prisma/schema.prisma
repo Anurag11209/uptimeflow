@@ -907,15 +907,20 @@ model StatusPageIncidentUpdate {
 }
 
 model StatusPageSubscriber {
-  id             String           @id @default(uuid(7)) @db.Uuid
-  statusPageId   String           @db.Uuid
-  email          String
-  status         SubscriberStatus @default(PENDING)
-  // Single-use token for confirm + unsubscribe links.
-  token          String           @unique
-  verifiedAt     DateTime?
-  unsubscribedAt DateTime?
-  createdAt      DateTime         @default(now())
+  id           String           @id @default(uuid(7)) @db.Uuid
+  statusPageId String           @db.Uuid
+  email        String
+  status       SubscriberStatus @default(PENDING)
+  // Legacy single-use token (kept nullable for backward compatibility). New
+  // flows (Phase 12) use the dedicated verification/unsubscribe tokens below,
+  // so one link never grants the other's capability.
+  token             String?          @unique
+  verificationToken String?          @unique
+  unsubscribeToken  String?          @unique
+  verifiedAt        DateTime?
+  unsubscribedAt    DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @default(now()) @updatedAt
 
   statusPage StatusPage @relation(fields: [statusPageId], references: [id], onDelete: Cascade)
 
