@@ -1,4 +1,4 @@
-import type { PrismaClient, MaintenanceWindow } from "@backend-uptime/db";
+import type { PrismaClient, Prisma } from "@backend-uptime/db";
 import type { AuditLogService } from "./audit-log.service.js";
 
 export interface CreateMaintenanceInput {
@@ -9,14 +9,24 @@ export interface CreateMaintenanceInput {
   monitorIds: string[];
 }
 
+export interface ActorPayload {
+  id: string;
+  type: "user" | "api_key";
+}
+
+// Strictly typing the return to include the relational monitor data
+export type MaintenanceWindowWithMonitors = Prisma.MaintenanceWindowGetPayload<{
+  include: { monitors: { select: { id: true; name: true } } };
+}>;
+
 export interface MaintenanceWindowService {
-  list(organizationId: string): Promise<MaintenanceWindow[]>;
+  list(organizationId: string): Promise<MaintenanceWindowWithMonitors[]>;
   create(
     organizationId: string,
-    actorId: string,
+    actor: ActorPayload,
     input: CreateMaintenanceInput,
-  ): Promise<MaintenanceWindow>;
-  delete(organizationId: string, actorId: string, windowId: string): Promise<boolean>;
+  ): Promise<MaintenanceWindowWithMonitors>;
+  delete(organizationId: string, actor: ActorPayload, windowId: string): Promise<void>;
 }
 
 export function createMaintenanceWindowService(deps: {
@@ -47,7 +57,17 @@ export function createMaintenanceWindowService(deps: {
      * Schedule a new maintenance window, linking specific monitors,
      * and writing an immutable entry into the security logs.
      */
-    async create(organizationId, actorId, input) {
+    async create(organizationId, actor, input) {
+      // Security Check: Verify all provided monitor IDs actually belong to this organization
+      if (input.monitorIds.length > 0) {
+        const ownedCount = await prisma.monitor.count({
+          where: { id: { in: input.monitorIds }, organizationId },
+        });
+        if (ownedCount !== input.monitorIds.length) {
+          throw new Error("INVALID_MONITOR");
+        }
+      }
+
       const newWindow = await prisma.maintenanceWindow.create({
         data: {
           organizationId,
@@ -55,17 +75,20 @@ export function createMaintenanceWindowService(deps: {
           description: input.description,
           startsAt: input.startsAt,
           endsAt: input.endsAt,
-          createdById: actorId,
+          createdById: actor.id,
           monitors: {
             connect: input.monitorIds.map((id) => ({ id: id })),
           },
+        },
+        include: {
+          monitors: { select: { id: true, name: true } },
         },
       });
 
       await auditLogs.log({
         organizationId,
-        actorId: actorId,
-        actorType: "user",
+        actorId: actor.id,
+        actorType: actor.type,
         action: "maintenance_window.created",
         resourceType: "maintenance_window",
         resourceId: newWindow.id,
@@ -76,33 +99,24 @@ export function createMaintenanceWindowService(deps: {
 
     /**
      * Soft-deletes a window by updating its `deletedAt` field.
-     * Validates organization ownership before mutating data.
+     
      */
-    async delete(organizationId, actorId, windowId) {
-      const existing = await prisma.maintenanceWindow.findFirst({
-        where: { id: windowId, organizationId: organizationId, deletedAt: null },
-      });
-
-      if (!existing) {
-        throw new Error("NOT_FOUND");
-      }
-
-      // Perform soft-delete to preserve references in historical data
-      await prisma.maintenanceWindow.update({
-        where: { id: windowId },
+    async delete(organizationId, actor, windowId) {
+      const result = await prisma.maintenanceWindow.updateMany({
+        where: { id: windowId, organizationId, deletedAt: null },
         data: { deletedAt: new Date() },
       });
 
+      if (result.count === 0) throw new Error("NOT_FOUND");
+
       await auditLogs.log({
         organizationId,
-        actorId: actorId,
-        actorType: "user",
+        actorId: actor.id,
+        actorType: actor.type,
         action: "maintenance_window.deleted",
         resourceType: "maintenance_window",
         resourceId: windowId,
       });
-
-      return true;
     },
   };
 }
