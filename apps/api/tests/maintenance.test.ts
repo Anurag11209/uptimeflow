@@ -181,6 +181,35 @@ describe("Maintenance Windows Service Logic", () => {
     );
   });
 
+  it("create() throws INVALID_MONITOR if a monitor belongs to another org", async () => {
+    const mockPrisma = svcPrisma({ monitorCount: 0 }); // count < monitorIds.length
+    const svc = createMaintenanceWindowService({ prisma: mockPrisma, auditLogs: fakeAuditLogs });
+
+    const input = {
+      title: "Bad Monitor",
+      startsAt: new Date(),
+      endsAt: new Date(Date.now() + 3600000),
+      monitorIds: ["mon_foreign"],
+    };
+
+    await expect(svc.create("org_1", { id: "user_1", type: "user" }, input)).rejects.toThrow(
+      "INVALID_MONITOR",
+    );
+    expect(mockPrisma.maintenanceWindow.create).not.toHaveBeenCalled();
+    expect(fakeAuditLogs.log).not.toHaveBeenCalled();
+  });
+
+  it("rejects creation if required fields (title) are missing", async () => {
+    const res = await request(app("owner"))
+      .post(BASE)
+      .set("x-test-user", "u1")
+      .send({
+        startsAt: new Date().toISOString(),
+        endsAt: new Date(Date.now() + 3600000).toISOString(),
+        monitorIds: [],
+      });
+    expect(res.status).toBe(400);
+  });
   it("delete() soft-deletes an existing window and writes an audit log", async () => {
     const mockPrisma = svcPrisma({ updateCount: 1 });
     const svc = createMaintenanceWindowService({ prisma: mockPrisma, auditLogs: fakeAuditLogs });
