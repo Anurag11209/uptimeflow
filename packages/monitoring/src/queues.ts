@@ -27,7 +27,7 @@ export const DEFAULT_REGION: ProbeRegion = "NA_EAST";
  * Phase 3 monitoring-agent).
  */
 export function checkQueueName(region: ProbeRegion): string {
-  return `${MONITOR_CHECK_QUEUE_PREFIX}:${region}`;
+  return `${MONITOR_CHECK_QUEUE_PREFIX}-${region}`;
 }
 
 /** BullMQ requires `maxRetriesPerRequest: null` on its connections. */
