@@ -40,7 +40,10 @@ import {
 } from "./services/escalation-policy.service.js";
 import { createIncidentService, type IncidentService } from "./services/incident.service.js";
 import { createMemberService, type MemberService } from "./services/member.service.js";
-import { createOnCallScheduleService, type OnCallScheduleService } from "./services/oncall.service.js";
+import {
+  createOnCallScheduleService,
+  type OnCallScheduleService,
+} from "./services/oncall.service.js";
 import { createOrgStatsService, type OrgStatsService } from "./services/org-stats.service.js";
 import type { BillingWebhookService } from "./services/billing-webhook.service.js";
 import { customDomainsRouter } from "./routes/custom-domains.js";
@@ -57,6 +60,11 @@ import {
   type StatusNotifier,
 } from "./services/status-page.service.js";
 import { metricsMiddleware, type Logger, type Metrics } from "./telemetry.js";
+import { maintenanceWindowsRouter } from "./routes/maintenance.js";
+import {
+  createMaintenanceWindowService,
+  type MaintenanceWindowService,
+} from "./services/maintenance-window.service.js";
 
 export interface ServerServices {
   members: MemberService;
@@ -71,6 +79,7 @@ export interface ServerServices {
   billing: BillingService;
   customDomains: CustomDomainService;
   statusPages: StatusPageService;
+  maintenanceWindows: MaintenanceWindowService;
 }
 
 export interface ServerDeps {
@@ -99,14 +108,14 @@ export interface ServerDeps {
 export function createServer(deps: ServerDeps): Express {
   const auditLogs =
     deps.services?.auditLogs ?? createAuditLogService({ prisma: deps.prisma, logger: deps.logger });
-  const planLimits =
-    deps.services?.planLimits ?? createPlanLimitsService({ prisma: deps.prisma });
+  const planLimits = deps.services?.planLimits ?? createPlanLimitsService({ prisma: deps.prisma });
   const services: ServerServices = {
     members: deps.services?.members ?? createMemberService({ prisma: deps.prisma }),
     auditLogs,
     orgStats: deps.services?.orgStats ?? createOrgStatsService({ prisma: deps.prisma }),
     apiKeys: deps.services?.apiKeys ?? createApiKeyService({ prisma: deps.prisma }),
-    incidents: deps.services?.incidents ?? createIncidentService({ prisma: deps.prisma, auditLogs }),
+    incidents:
+      deps.services?.incidents ?? createIncidentService({ prisma: deps.prisma, auditLogs }),
     escalationPolicies:
       deps.services?.escalationPolicies ??
       createEscalationPolicyService({ prisma: deps.prisma, auditLogs }),
@@ -144,6 +153,9 @@ export function createServer(deps: ServerDeps): Express {
         webUrl: deps.env.WEB_URL,
         notifier: deps.statusNotifier,
       }),
+    maintenanceWindows:
+      deps.services?.maintenanceWindows ??
+      createMaintenanceWindowService({ prisma: deps.prisma, auditLogs }),
   };
 
   const app = express();
@@ -178,7 +190,11 @@ export function createServer(deps: ServerDeps): Express {
   // Unauthenticated infrastructure endpoints (not rate limited).
   app.use(healthRouter({ prisma: deps.prisma, redis: deps.redis }));
   app.use(metricsRouter({ registry: deps.metrics.registry, env: deps.env }));
-  app.use(emailHealthRouter({ emailProvider: deps.emailProvider ?? new LoggingEmailProvider(deps.logger) }));
+  app.use(
+    emailHealthRouter({
+      emailProvider: deps.emailProvider ?? new LoggingEmailProvider(deps.logger),
+    }),
+  );
   // Edge hostname → status-page resolution (Caddy TLS ask + public renderer).
   // Unauthenticated and unthrottled by design: the hostname is the lookup key.
   app.use(domainResolutionRouter({ service: services.customDomains }));
@@ -214,7 +230,10 @@ export function createServer(deps: ServerDeps): Express {
   v1.use(
     "/organizations/:organizationId/escalation-policies",
     authn,
-    escalationPoliciesRouter({ prisma: deps.prisma, escalationPolicies: services.escalationPolicies }),
+    escalationPoliciesRouter({
+      prisma: deps.prisma,
+      escalationPolicies: services.escalationPolicies,
+    }),
   );
   v1.use(
     "/organizations/:organizationId/oncall-schedules",
@@ -224,17 +243,29 @@ export function createServer(deps: ServerDeps): Express {
   v1.use(
     "/organizations/:organizationId/integrations/slack",
     authn,
-    slackIntegrationRouter({ prisma: deps.prisma, auditLogs, dispatcher: deps.integrationDispatcher }),
+    slackIntegrationRouter({
+      prisma: deps.prisma,
+      auditLogs,
+      dispatcher: deps.integrationDispatcher,
+    }),
   );
   v1.use(
     "/organizations/:organizationId/integrations/discord",
     authn,
-    discordIntegrationRouter({ prisma: deps.prisma, auditLogs, dispatcher: deps.integrationDispatcher }),
+    discordIntegrationRouter({
+      prisma: deps.prisma,
+      auditLogs,
+      dispatcher: deps.integrationDispatcher,
+    }),
   );
   v1.use(
     "/organizations/:organizationId/integrations/webhooks",
     authn,
-    webhookIntegrationRouter({ prisma: deps.prisma, auditLogs, dispatcher: deps.integrationDispatcher }),
+    webhookIntegrationRouter({
+      prisma: deps.prisma,
+      auditLogs,
+      dispatcher: deps.integrationDispatcher,
+    }),
   );
   v1.use(
     "/organizations/:organizationId/integrations/deliveries",
@@ -256,6 +287,15 @@ export function createServer(deps: ServerDeps): Express {
     authn,
     statusPagesAuthedRouter({ prisma: deps.prisma, statusPages: services.statusPages }),
   );
+  v1.use(
+    "/organizations/:organizationId/maintenance-windows",
+    authn,
+    maintenanceWindowsRouter({
+      prisma: deps.prisma,
+      maintenanceWindows: services.maintenanceWindows,
+    }),
+  );
+
   v1.use(
     "/organizations/:organizationId",
     authn,
