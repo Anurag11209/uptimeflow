@@ -65,7 +65,13 @@ import {
   createMaintenanceWindowService,
   type MaintenanceWindowService,
 } from "./services/maintenance-window.service.js";
-
+import { createMonitorService, type MonitorService } from "./services/monitor.service.js";
+import {
+  createAlertChannelService,
+  type AlertChannelService,
+} from "./services/alert-channel.service.js";
+import { monitorsRouter } from "./routes/monitors.js";
+import { alertChannelsRouter } from "./routes/alert-channels.js";
 export interface ServerServices {
   members: MemberService;
   auditLogs: AuditLogService;
@@ -80,6 +86,8 @@ export interface ServerServices {
   customDomains: CustomDomainService;
   statusPages: StatusPageService;
   maintenanceWindows: MaintenanceWindowService;
+  monitors: MonitorService;
+  channels: AlertChannelService;
 }
 
 export interface ServerDeps {
@@ -156,6 +164,13 @@ export function createServer(deps: ServerDeps): Express {
     maintenanceWindows:
       deps.services?.maintenanceWindows ??
       createMaintenanceWindowService({ prisma: deps.prisma, auditLogs }),
+
+    monitors:
+      deps.services?.monitors ??
+      createMonitorService({ prisma: deps.prisma, auditLogs, planLimits }),
+    channels:
+      deps.services?.channels ??
+      createAlertChannelService({ prisma: deps.prisma, auditLogs, planLimits }),
   };
 
   const app = express();
@@ -294,6 +309,17 @@ export function createServer(deps: ServerDeps): Express {
       prisma: deps.prisma,
       maintenanceWindows: services.maintenanceWindows,
     }),
+  );
+
+  v1.use(
+    "/organizations/:organizationId/monitors",
+    authn,
+    monitorsRouter({ prisma: deps.prisma, monitors: services.monitors }),
+  );
+  v1.use(
+    "/organizations/:organizationId/alert-channels",
+    authn,
+    alertChannelsRouter({ prisma: deps.prisma, channels: services.channels }),
   );
 
   v1.use(
