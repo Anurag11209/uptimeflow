@@ -1,4 +1,5 @@
 import { Socket } from "node:net";
+import { createSecureLookup } from "@backend-uptime/notifications";
 import type { MonitorSnapshot, Probe, ProbeContext, ProbeSignal } from "../types.js";
 
 /** Default L4 reachability port when a ping monitor omits one. */
@@ -35,11 +36,18 @@ function tcpConnect(
     );
     socket.once("timeout", () => fail("timeout", "Connection timed out."));
     socket.once("error", (err: NodeJS.ErrnoException) => {
-      const type = err.code === "ECONNREFUSED" ? "refused" : err.code === "ENOTFOUND" ? "dns" : "connect";
+      const type = err.code?.startsWith("ssrf")
+        ? "blocked"
+        : err.code === "ECONNREFUSED"
+          ? "refused"
+          : err.code === "ENOTFOUND"
+            ? "dns"
+            : "connect";
       fail(type, err.message);
     });
 
-    socket.connect({ host, port });
+    // SSRF guard: validate + pin the resolved IP at connect time.
+    socket.connect({ host, port, lookup: createSecureLookup() });
   });
 }
 

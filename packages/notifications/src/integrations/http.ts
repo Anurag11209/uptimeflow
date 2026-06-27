@@ -1,3 +1,5 @@
+import { assertSafeUrl, SsrfError, type SsrfOptions } from "../security/ssrf.js";
+
 export interface DeliveryResult {
   ok: boolean;
   /** HTTP status, or 0 on a network/timeout error. */
@@ -8,13 +10,21 @@ export interface DeliveryResult {
 /** Subset of the WHATWG fetch signature, so tests can inject a stub. */
 export type FetchLike = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body: string;
+    signal?: AbortSignal;
+    redirect?: "follow" | "error" | "manual";
+  },
 ) => Promise<{ status: number; ok: boolean; text(): Promise<string> }>;
 
 export interface PostJsonOptions {
   headers?: Record<string, string>;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
+  /** SSRF policy override (e.g. allowPrivate for self-hosted/internal). */
+  ssrf?: SsrfOptions;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -35,6 +45,16 @@ export function postJson(url: string, body: unknown, options: PostJsonOptions = 
  */
 export async function postRaw(url: string, body: string, options: PostJsonOptions = {}): Promise<DeliveryResult> {
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+
+  // SSRF guard: validate protocol/host and reject if the target resolves to a
+  // private/reserved address — before any bytes leave the process.
+  try {
+    await assertSafeUrl(url, options.ssrf);
+  } catch (err) {
+    if (err instanceof SsrfError) return { ok: false, status: 0, error: err.message };
+    throw err;
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
@@ -43,6 +63,8 @@ export async function postRaw(url: string, body: string, options: PostJsonOption
       headers: { "content-type": "application/json", ...options.headers },
       body,
       signal: controller.signal,
+      // Webhooks must not redirect — a redirect is a classic SSRF pivot.
+      redirect: "error",
     });
     if (res.ok) return { ok: true, status: res.status };
     const text = await res.text().catch(() => "");

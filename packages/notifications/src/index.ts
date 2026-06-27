@@ -26,3 +26,6 @@ export * from "./integrations/http.js";
 export * from "./slack/index.js";
 export * from "./discord/index.js";
 export * from "./webhooks/index.js";
+
+// SSRF protection for all user-directed outbound requests.
+export * from "./security/ssrf.js";
