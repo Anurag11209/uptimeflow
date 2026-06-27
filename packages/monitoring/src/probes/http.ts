@@ -1,6 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import type { TLSSocket } from "node:tls";
+import { createSecureLookup, validateUrl, SsrfError } from "@backend-uptime/notifications";
 import type { CertInfo, MonitorSnapshot, Probe, ProbeContext, ProbeSignal } from "../types.js";
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -69,6 +70,9 @@ function performRequest(
     // Honour the monitor's TLS verification preference.
     rejectUnauthorized: isHttps ? monitor.verifySsl : undefined,
     servername: isHttps ? target.hostname : undefined,
+    // SSRF guard: validate + pin the resolved IP at connect time (defeats
+    // DNS-rebinding because we connect to exactly the address we validated).
+    lookup: createSecureLookup(),
   };
 
   return new Promise<SingleResponse>((resolve, reject) => {
@@ -144,14 +148,16 @@ export const httpProbe: Probe = async (monitor, ctx) => {
 
   const started = performance.now();
   try {
-    let current = new URL(monitor.url);
+    // Validate the initial URL shape (protocol/credentials/literal IP) up front.
+    let current = validateUrl(monitor.url);
     let last: SingleResponse | undefined;
 
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       last = await performRequest(current, monitor, ctx);
       const isRedirect = last.statusCode >= 300 && last.statusCode < 400 && !!last.location;
       if (!isRedirect || !monitor.followRedirects || hop === MAX_REDIRECTS) break;
-      current = new URL(last.location!, current);
+      // Re-validate every redirect hop — a redirect is a classic SSRF pivot.
+      current = validateUrl(new URL(last.location!, current).href);
     }
 
     const responseMs = Math.round(performance.now() - started);
@@ -164,6 +170,14 @@ export const httpProbe: Probe = async (monitor, ctx) => {
       cert: last!.cert,
     };
   } catch (error) {
+    if (error instanceof SsrfError) {
+      return {
+        reachable: false,
+        responseMs: Math.round(performance.now() - started),
+        errorType: "blocked",
+        errorMessage: error.message,
+      };
+    }
     const err = error as NodeJS.ErrnoException;
     const errorType = ctx.signal.aborted ? "timeout" : classifyHttpError(err);
     return {

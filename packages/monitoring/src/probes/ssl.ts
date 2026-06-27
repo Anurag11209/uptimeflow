@@ -1,4 +1,5 @@
 import { connect as tlsConnect } from "node:tls";
+import { createSecureLookup } from "@backend-uptime/notifications";
 import type { CertInfo, Probe, ProbeSignal } from "../types.js";
 import { certName } from "./http.js";
 
@@ -28,6 +29,8 @@ export const sslProbe: Probe = async (monitor, ctx) => {
       // reported separately rather than hard-failing the connection.
       rejectUnauthorized: false,
       timeout: monitor.timeoutSeconds * 1000,
+      // SSRF guard: validate + pin the resolved IP at connect time.
+      lookup: createSecureLookup(),
     });
 
     const done = (signal: ProbeSignal): void => {
@@ -61,7 +64,13 @@ export const sslProbe: Probe = async (monitor, ctx) => {
     });
     socket.once("timeout", () => fail("timeout", "TLS handshake timed out."));
     socket.once("error", (err: NodeJS.ErrnoException) => {
-      const type = err.code === "ECONNREFUSED" ? "refused" : err.code === "ENOTFOUND" ? "dns" : "tls";
+      const type = err.code?.startsWith("ssrf")
+        ? "blocked"
+        : err.code === "ECONNREFUSED"
+          ? "refused"
+          : err.code === "ENOTFOUND"
+            ? "dns"
+            : "tls";
       fail(type, err.message);
     });
   });

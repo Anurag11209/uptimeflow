@@ -1,5 +1,6 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { createSecureLookup, validateUrl } from "@backend-uptime/notifications";
 import type { AlertChannelType } from "@backend-uptime/db";
 
 export interface AlertPayload {
@@ -33,7 +34,8 @@ export interface TransportLogger {
 export const webhookTransport: AlertTransport = (channel, payload) => {
   const config = (channel.config ?? {}) as { url?: string };
   if (!config.url) throw new Error("webhook channel is missing a url");
-  const target = new URL(config.url);
+  // SSRF guard: reject non-http(s)/credentialed/literal-private URLs up front.
+  const target = validateUrl(config.url);
   const requestFn = target.protocol === "https:" ? httpsRequest : httpRequest;
   const body = JSON.stringify(payload);
 
@@ -44,6 +46,8 @@ export const webhookTransport: AlertTransport = (channel, payload) => {
         method: "POST",
         timeout: 10_000,
         headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+        // Validate + pin the resolved IP at connect time (rebinding-proof).
+        lookup: createSecureLookup(),
       },
       (res) => {
         res.resume(); // drain
