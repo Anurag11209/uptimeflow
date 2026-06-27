@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { Activity, AlertTriangle, Mail, ScrollText, Users } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { hasPermission } from "@backend-uptime/shared";
 import { useActiveOrg, useAuditLogs, useOverview } from "@/lib/queries";
@@ -116,15 +115,26 @@ export default function DashboardOverviewPage() {
                 Monitors
               </h2>
             </div>
-            <Badge tone="brand">Phase 2</Badge>
+            <Link
+              href="/dashboard/monitors"
+              className="text-xs text-muted hover:text-brand"
+            >
+              View all →
+            </Link>
           </div>
-          <div className="flex flex-col items-center justify-center gap-2 px-5 py-14 text-center">
-            <p className="text-sm text-text">No monitors yet</p>
-            <p className="max-w-xs text-xs leading-relaxed text-muted">
-              Multi-region HTTP, TCP, ping, DNS and keyword checks arrive in
-              Phase 2 — the monitoring engine. This phase ships the account and
-              organization foundation they&apos;ll run on.
+          <div className="flex flex-col items-center justify-center gap-3 px-5 py-12 text-center">
+            <p className="font-[family-name:var(--font-display)] text-3xl font-semibold tabular-nums">
+              {stats?.monitors ?? 0}
             </p>
+            <p className="max-w-xs text-xs leading-relaxed text-muted">
+              Multi-region HTTP, TCP, ping, SSL, keyword, and heartbeat checks.
+            </p>
+            <Link
+              href="/dashboard/monitors"
+              className="text-sm font-medium text-brand hover:underline"
+            >
+              Manage monitors
+            </Link>
           </div>
         </Card>
 

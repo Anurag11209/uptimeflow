@@ -3,7 +3,15 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { Activity, CreditCard, Globe, Plug, ShieldCheck, Users } from "lucide-react";
+import {
+  Activity,
+  CreditCard,
+  Globe,
+  Plug,
+  Radar,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
 import { OrgSwitcher } from "@/components/org-switcher";
 import { SignOutButton } from "@/components/sign-out-button";
 import { useSession } from "@/lib/auth-client";
@@ -12,6 +20,7 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/dashboard", label: "Overview", icon: Activity, exact: true },
+  { href: "/dashboard/monitors", label: "Monitors", icon: Radar },
   { href: "/dashboard/settings/members", label: "Members", icon: Users },
   { href: "/dashboard/settings/integrations", label: "Integrations", icon: Plug },
   { href: "/dashboard/settings/domains", label: "Domains", icon: Globe },
