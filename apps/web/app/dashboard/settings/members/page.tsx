@@ -130,6 +130,22 @@ export default function MembersPage() {
     invalidateOrg(orgId);
   }
 
+  async function resendInvitation(inv: { id: string; email: string; role: string | null }) {
+    if (!orgId) return;
+    setBusyId(inv.id);
+    // Better Auth re-sends and refreshes the expiry when resend is set.
+    const { error: resendError } = await authClient.organization.inviteMember({
+      email: inv.email,
+      role: (inv.role ?? "viewer") as OrgRole,
+      organizationId: orgId,
+      resend: true,
+    });
+    setBusyId(null);
+    setNotice(resendError ? null : `Invitation re-sent to ${inv.email}.`);
+    if (resendError) setError(resendError.message ?? "Could not resend the invitation.");
+    invalidateOrg(orgId);
+  }
+
   return (
     <div className="space-y-8">
       <div>
@@ -288,6 +304,13 @@ export default function MembersPage() {
                 <div className="flex items-center gap-3">
                   {inv.role ? <RoleBadge role={inv.role} /> : null}
                   <Badge tone="muted">{inv.status}</Badge>
+                  <button
+                    onClick={() => resendInvitation(inv)}
+                    disabled={busyId === inv.id}
+                    className="text-xs text-muted hover:text-brand disabled:opacity-50"
+                  >
+                    Resend
+                  </button>
                   <button
                     onClick={() => cancelInvitation(inv.id)}
                     disabled={busyId === inv.id}
