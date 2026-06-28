@@ -6,14 +6,10 @@ import { useEffect } from "react";
 import {
   Activity,
   BarChart3,
-  CreditCard,
-  Globe,
   LayoutPanelTop,
-  Plug,
   Radar,
-  ShieldCheck,
+  Settings,
   Siren,
-  Users,
   Wrench,
 } from "lucide-react";
 import { OrgSwitcher } from "@/components/org-switcher";
@@ -29,11 +25,7 @@ const NAV = [
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/dashboard/maintenance", label: "Maintenance", icon: Wrench },
   { href: "/dashboard/status-pages", label: "Status pages", icon: LayoutPanelTop },
-  { href: "/dashboard/settings/members", label: "Members", icon: Users },
-  { href: "/dashboard/settings/integrations", label: "Integrations", icon: Plug },
-  { href: "/dashboard/settings/domains", label: "Domains", icon: Globe },
-  { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
-  { href: "/dashboard/settings/security", label: "Security", icon: ShieldCheck },
+  { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
