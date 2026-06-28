@@ -1,10 +1,6 @@
 "use client";
 
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Page } from "@/lib/queries";
 import { average, type ChartPoint, type DailyAvailability } from "@/lib/chart";
@@ -35,14 +31,7 @@ export type MonitorHealth =
 
 export type CheckStatus = "UP" | "DOWN" | "DEGRADED" | "TIMEOUT" | "ERROR";
 
-export type HttpMethod =
-  | "GET"
-  | "HEAD"
-  | "POST"
-  | "PUT"
-  | "PATCH"
-  | "DELETE"
-  | "OPTIONS";
+export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
 export type ProbeRegion =
   | "NA_EAST"
@@ -205,12 +194,10 @@ export interface IncidentListItem {
 export const monitorKeys = {
   all: (orgId: string) => ["org", orgId, "monitors"] as const,
   detail: (orgId: string, id: string) => ["org", orgId, "monitors", id] as const,
-  checks: (orgId: string, id: string) =>
-    ["org", orgId, "monitors", id, "check-results"] as const,
+  checks: (orgId: string, id: string) => ["org", orgId, "monitors", id, "check-results"] as const,
   windows: (orgId: string, id: string) =>
     ["org", orgId, "monitors", id, "maintenance-windows"] as const,
-  incidents: (orgId: string, id: string) =>
-    ["org", orgId, "monitors", id, "incidents"] as const,
+  incidents: (orgId: string, id: string) => ["org", orgId, "monitors", id, "incidents"] as const,
   channels: (orgId: string) => ["org", orgId, "alert-channels"] as const,
   policies: (orgId: string) => ["org", orgId, "escalation-policies"] as const,
 };
@@ -252,7 +239,7 @@ export interface MonitorListFilters {
 export function useMonitors(orgId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: monitorKeys.all(orgId ?? "none"),
-    queryFn: () => api<Page<MonitorListItem>>(`${monitorBase(orgId!)}?limit=200`),
+    queryFn: () => api<Page<MonitorListItem>>(`${monitorBase(orgId!)}?limit=100`),
     enabled: Boolean(orgId) && enabled,
   });
 }
@@ -265,45 +252,28 @@ export function useMonitor(orgId: string | undefined, id: string | undefined) {
   });
 }
 
-export function useCheckResults(
-  orgId: string | undefined,
-  id: string | undefined,
-  limit = 100,
-) {
+export function useCheckResults(orgId: string | undefined, id: string | undefined, limit = 100) {
   return useQuery({
     queryKey: monitorKeys.checks(orgId ?? "none", id ?? "none"),
     queryFn: () =>
-      api<Page<CheckResultItem>>(
-        `${monitorBase(orgId!)}/${id}/check-results?limit=${limit}`,
-      ),
+      api<Page<CheckResultItem>>(`${monitorBase(orgId!)}/${id}/check-results?limit=${limit}`),
     enabled: Boolean(orgId) && Boolean(id),
   });
 }
 
-export function useMonitorMaintenanceWindows(
-  orgId: string | undefined,
-  id: string | undefined,
-) {
+export function useMonitorMaintenanceWindows(orgId: string | undefined, id: string | undefined) {
   return useQuery({
     queryKey: monitorKeys.windows(orgId ?? "none", id ?? "none"),
-    queryFn: () =>
-      api<MaintenanceWindowView[]>(
-        `${monitorBase(orgId!)}/${id}/maintenance-windows`,
-      ),
+    queryFn: () => api<MaintenanceWindowView[]>(`${monitorBase(orgId!)}/${id}/maintenance-windows`),
     enabled: Boolean(orgId) && Boolean(id),
   });
 }
 
-export function useMonitorIncidents(
-  orgId: string | undefined,
-  id: string | undefined,
-) {
+export function useMonitorIncidents(orgId: string | undefined, id: string | undefined) {
   return useQuery({
     queryKey: monitorKeys.incidents(orgId ?? "none", id ?? "none"),
     queryFn: () =>
-      api<Page<IncidentListItem>>(
-        `/v1/organizations/${orgId}/incidents?monitorId=${id}&limit=20`,
-      ),
+      api<Page<IncidentListItem>>(`/v1/organizations/${orgId}/incidents?monitorId=${id}&limit=20`),
     enabled: Boolean(orgId) && Boolean(id),
   });
 }
@@ -312,9 +282,7 @@ export function useAlertChannels(orgId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: monitorKeys.channels(orgId ?? "none"),
     queryFn: () =>
-      api<Page<AlertChannelItem>>(
-        `/v1/organizations/${orgId}/alert-channels?limit=100`,
-      ),
+      api<Page<AlertChannelItem>>(`/v1/organizations/${orgId}/alert-channels?limit=100`),
     enabled: Boolean(orgId) && enabled,
   });
 }
@@ -323,9 +291,7 @@ export function useEscalationPolicies(orgId: string | undefined, enabled = true)
   return useQuery({
     queryKey: monitorKeys.policies(orgId ?? "none"),
     queryFn: () =>
-      api<Page<EscalationPolicyItem>>(
-        `/v1/organizations/${orgId}/escalation-policies?limit=100`,
-      ),
+      api<Page<EscalationPolicyItem>>(`/v1/organizations/${orgId}/escalation-policies?limit=100`),
     enabled: Boolean(orgId) && enabled,
   });
 }
@@ -390,9 +356,7 @@ export function useToggleMonitorState(orgId: string) {
       }),
     onMutate: async ({ id, action }) => {
       await queryClient.cancelQueries({ queryKey: monitorKeys.all(orgId) });
-      const previous = queryClient.getQueryData<Page<MonitorListItem>>(
-        monitorKeys.all(orgId),
-      );
+      const previous = queryClient.getQueryData<Page<MonitorListItem>>(monitorKeys.all(orgId));
       const nextState: MonitorState = action === "pause" ? "PAUSED" : "ACTIVE";
       const nextHealth: MonitorHealth = action === "pause" ? "PAUSED" : "PENDING";
       if (previous) {
@@ -522,9 +486,7 @@ export function incidentStatusMeta(status: IncidentStatus): {
 }
 
 /** The human-facing target for a monitor (URL, or host[:port]). */
-export function monitorTarget(
-  m: Pick<MonitorListItem, "url" | "host" | "port">,
-): string {
+export function monitorTarget(m: Pick<MonitorListItem, "url" | "host" | "port">): string {
   if (m.url) return m.url;
   if (m.host) return m.port ? `${m.host}:${m.port}` : m.host;
   return "—";
@@ -544,10 +506,7 @@ export function formatInterval(seconds: number): string {
 }
 
 /** Compact relative time, e.g. "just now", "5m ago", "3h ago", "2d ago". */
-export function formatRelativeTime(
-  iso: string | null,
-  now: number = Date.now(),
-): string {
+export function formatRelativeTime(iso: string | null, now: number = Date.now()): string {
   if (!iso) return "Never";
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "—";
@@ -562,9 +521,7 @@ export function formatRelativeTime(
 /** Uptime % across a set of check results (UP and DEGRADED count as available). */
 export function uptimePercent(checks: Pick<CheckResultItem, "status">[]): number {
   if (checks.length === 0) return 0;
-  const ok = checks.filter(
-    (c) => c.status === "UP" || c.status === "DEGRADED",
-  ).length;
+  const ok = checks.filter((c) => c.status === "UP" || c.status === "DEGRADED").length;
   return (ok / checks.length) * 100;
 }
 
@@ -575,19 +532,13 @@ export function formatUptimePercent(pct: number): string {
 
 /** Average latency over check results that recorded a response time. */
 export function averageLatency(checks: CheckResultItem[]): number | null {
-  return average(
-    checks
-      .map((c) => c.responseMs)
-      .filter((v): v is number => typeof v === "number"),
-  );
+  return average(checks.map((c) => c.responseMs).filter((v): v is number => typeof v === "number"));
 }
 
 /** Latency points for the line chart — oldest→newest. */
 export function toLatencyPoints(checks: CheckResultItem[]): ChartPoint[] {
   return checks
-    .filter((c): c is CheckResultItem & { responseMs: number } =>
-      typeof c.responseMs === "number",
-    )
+    .filter((c): c is CheckResultItem & { responseMs: number } => typeof c.responseMs === "number")
     .map((c) => ({ t: new Date(c.checkedAt).getTime(), value: c.responseMs }))
     .sort((a, b) => a.t - b.t);
 }
