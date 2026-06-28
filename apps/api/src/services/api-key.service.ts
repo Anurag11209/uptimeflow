@@ -38,6 +38,8 @@ export interface ApiKeySummary {
   lastUsedAt: Date | null;
   expiresAt: Date | null;
   revokedAt: Date | null;
+  /** Member who minted the key; lets the UI surface personal access tokens. */
+  createdById: string | null;
   createdAt: Date;
 }
 
@@ -133,6 +135,7 @@ export function createApiKeyService(deps: ApiKeyServiceDeps): ApiKeyService {
           lastUsedAt: true,
           expiresAt: true,
           revokedAt: true,
+          createdById: true,
           createdAt: true,
         },
       });

@@ -71,9 +71,14 @@ import {
   type AlertChannelService,
 } from "./services/alert-channel.service.js";
 import { createAnalyticsService, type AnalyticsService } from "./services/analytics.service.js";
+import {
+  createOrgSettingsService,
+  type OrgSettingsService,
+} from "./services/organization-settings.service.js";
 import { monitorsRouter } from "./routes/monitors.js";
 import { alertChannelsRouter } from "./routes/alert-channels.js";
 import { analyticsRouter } from "./routes/analytics.js";
+import { organizationSettingsRouter } from "./routes/organization-settings.js";
 export interface ServerServices {
   members: MemberService;
   auditLogs: AuditLogService;
@@ -91,6 +96,7 @@ export interface ServerServices {
   monitors: MonitorService;
   channels: AlertChannelService;
   analytics: AnalyticsService;
+  orgSettings: OrgSettingsService;
 }
 
 export interface ServerDeps {
@@ -175,6 +181,8 @@ export function createServer(deps: ServerDeps): Express {
       deps.services?.channels ??
       createAlertChannelService({ prisma: deps.prisma, auditLogs, planLimits }),
     analytics: deps.services?.analytics ?? createAnalyticsService({ prisma: deps.prisma }),
+    orgSettings:
+      deps.services?.orgSettings ?? createOrgSettingsService({ prisma: deps.prisma, auditLogs }),
   };
 
   const app = express();
@@ -329,6 +337,11 @@ export function createServer(deps: ServerDeps): Express {
     "/organizations/:organizationId/analytics",
     authn,
     analyticsRouter({ prisma: deps.prisma, analytics: services.analytics }),
+  );
+  v1.use(
+    "/organizations/:organizationId/settings",
+    authn,
+    organizationSettingsRouter({ prisma: deps.prisma, orgSettings: services.orgSettings }),
   );
 
   v1.use(
