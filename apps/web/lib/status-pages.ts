@@ -262,7 +262,7 @@ function base(orgId: string): string {
 export function useStatusPages(orgId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: statusPageKeys.all(orgId ?? "none"),
-    queryFn: () => api<Page<StatusPageListItem>>(`${base(orgId!)}?limit=200`),
+    queryFn: () => api<Page<StatusPageListItem>>(`${base(orgId!)}?limit=100`),
     enabled: Boolean(orgId) && enabled,
   });
 }
@@ -294,7 +294,7 @@ export function useStatusPageIncidents(orgId: string | undefined, id: string, en
 export function useStatusPageSubscribers(orgId: string | undefined, id: string, enabled = true) {
   return useQuery({
     queryKey: statusPageKeys.subscribers(orgId ?? "none", id),
-    queryFn: () => api<SubscriberListResult>(`${base(orgId!)}/${id}/subscribers?limit=200`),
+    queryFn: () => api<SubscriberListResult>(`${base(orgId!)}/${id}/subscribers?limit=100`),
     enabled: Boolean(orgId) && Boolean(id) && enabled,
   });
 }

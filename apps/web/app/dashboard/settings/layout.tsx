@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   UserCog,
   Users,
+  BellRing,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +21,7 @@ const SETTINGS_NAV = [
   { href: "/dashboard/settings/members", label: "Members", icon: Users },
   { href: "/dashboard/settings/api-keys", label: "API keys", icon: KeyRound },
   { href: "/dashboard/settings/integrations", label: "Integrations", icon: Plug },
+  { href: "/dashboard/settings/alert-channels", label: "Alert Channels", icon: BellRing },
   { href: "/dashboard/settings/domains", label: "Domains", icon: Globe },
   { href: "/dashboard/settings/audit-logs", label: "Audit logs", icon: ScrollText },
   { href: "/dashboard/settings/profile", label: "Profile", icon: UserCog },
@@ -56,9 +58,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-2.5 whitespace-nowrap rounded-md px-3 py-2 text-sm transition-colors",
-                  active
-                    ? "bg-panel text-text"
-                    : "text-muted hover:bg-panel/60 hover:text-text",
+                  active ? "bg-panel text-text" : "text-muted hover:bg-panel/60 hover:text-text",
                 )}
               >
                 <Icon className="size-4 shrink-0" />

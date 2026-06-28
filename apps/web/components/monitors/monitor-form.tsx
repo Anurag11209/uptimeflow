@@ -36,15 +36,7 @@ import {
 } from "@/lib/monitor-form";
 import { formatInterval } from "@/lib/monitors";
 
-const HTTP_METHODS = [
-  "GET",
-  "HEAD",
-  "POST",
-  "PUT",
-  "PATCH",
-  "DELETE",
-  "OPTIONS",
-] as const;
+const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
 
 export interface MonitorFormProps {
   initial: MonitorFormState;
@@ -99,9 +91,7 @@ function Section({
         <h2 className="font-[family-name:var(--font-display)] text-sm font-semibold text-text">
           {title}
         </h2>
-        {description ? (
-          <p className="mt-0.5 text-xs text-muted">{description}</p>
-        ) : null}
+        {description ? <p className="mt-0.5 text-xs text-muted">{description}</p> : null}
       </div>
       <div className="flex flex-col gap-4">{children}</div>
     </Card>
@@ -122,10 +112,7 @@ export function MonitorForm({
   const [errors, setErrors] = useState<MonitorFormErrors>({});
   const [submitted, setSubmitted] = useState(false);
 
-  function update<K extends keyof MonitorFormState>(
-    key: K,
-    value: MonitorFormState[K],
-  ) {
+  function update<K extends keyof MonitorFormState>(key: K, value: MonitorFormState[K]) {
     setState((s) => {
       const next = { ...s, [key]: value };
       if (submitted) setErrors(validateMonitorForm(next));
@@ -341,11 +328,7 @@ export function MonitorForm({
           </Field>
           {!isHeartbeat ? (
             <>
-              <Field
-                label="Timeout (s)"
-                htmlFor="timeoutSeconds"
-                error={errors.timeoutSeconds}
-              >
+              <Field label="Timeout (s)" htmlFor="timeoutSeconds" error={errors.timeoutSeconds}>
                 <Input
                   id="timeoutSeconds"
                   inputMode="numeric"
@@ -448,15 +431,16 @@ export function MonitorForm({
         <Field label="Alert channels" htmlFor="channels">
           {channels.length === 0 ? (
             <p className="text-xs text-muted">
-              No alert channels yet. Create one under Integrations first.
+              No alert channels yet.{" "}
+              <a href="/dashboard/settings/alert-channels" className="text-brand underline">
+                Create one in Settings → Alert Channels
+              </a>{" "}
+              first.
             </p>
           ) : (
             <div id="channels" className="flex flex-col gap-2">
               {channels.map((c) => (
-                <label
-                  key={c.id}
-                  className="flex items-center gap-2 text-sm text-text"
-                >
+                <label key={c.id} className="flex items-center gap-2 text-sm text-text">
                   <input
                     type="checkbox"
                     checked={state.channelIds.includes(c.id)}
