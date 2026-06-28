@@ -11,7 +11,10 @@
  *
  * Idempotent: safe to run repeatedly.
  */
-import "dotenv/config";
+// Load the single, repo-root .env (see prisma.config.ts). `prisma db seed` runs
+// `tsx prisma/seed.ts` with cwd = packages/db, so ../../.env is the repo root.
+import { config } from "dotenv";
+config({ path: "../../.env" });
 
 import { randomUUID } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";

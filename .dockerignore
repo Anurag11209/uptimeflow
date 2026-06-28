@@ -1,0 +1,59 @@
+# .dockerignore — applies to the WHOLE build context (context is the repo root
+# for all three images: apps/api, apps/web, apps/worker). BuildKit excludes
+# these paths before any COPY runs, so even `COPY packages ./packages` cannot
+# pull an ignored file into an image layer.
+
+# ---- Secrets: never ship a .env (or any credential) into an image ----
+# `**/` is essential: it catches packages/db/.env, apps/*/.env, etc. — not just
+# the repo-root .env. .env.example is the only env file allowed in (harmless,
+# values are placeholders) so the contract is visible if needed.
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cert
+*.keystore
+id_rsa
+id_rsa.*
+.aws/
+aws-credentials*
+credentials
+credentials.*
+*.secret
+secrets.*
+
+# ---- Dependencies & build output (each image installs/builds fresh) ----
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+.turbo
+**/.turbo
+coverage
+**/coverage
+*.tsbuildinfo
+
+# ---- VCS, CI, IDE, OS cruft (never needed at build time) ----
+.git
+.gitignore
+.githooks
+.github
+.vscode
+.idea
+.DS_Store
+**/.DS_Store
+*.log
+
+# ---- Docs & local-only infra (not copied by any Dockerfile) ----
+docs
+infra
+README.md
+docker-compose.yml
+docker-compose.override.yml
+.dockerignore

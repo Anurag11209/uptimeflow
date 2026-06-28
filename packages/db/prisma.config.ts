@@ -1,4 +1,10 @@
-import "dotenv/config";
+// Load the single, repo-root .env (one source of truth for secrets) instead of
+// dotenv's default cwd lookup, which created a duplicate packages/db/.env. All
+// db scripts run via `pnpm --filter @backend-uptime/db ...`, so cwd is this
+// package dir and ../../.env resolves to the repo root. A missing file is a
+// no-op (CI has no .env and gets DATABASE_URL from the environment).
+import { config } from "dotenv";
+config({ path: "../../.env" });
 
 import { defineConfig } from "prisma/config";
 
