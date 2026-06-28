@@ -16,6 +16,7 @@ import { HealthBadge } from "@/components/monitors/health-badge";
 import { LineChart } from "@/components/charts/line-chart";
 import { AvailabilityChart } from "@/components/charts/availability-chart";
 import { UptimeBars, type UptimeCell } from "@/components/charts/uptime-bars";
+import { MonitorAnalytics } from "@/components/analytics/monitor-analytics";
 import { ApiError } from "@/lib/api";
 import { useActiveOrg } from "@/lib/queries";
 import {
@@ -241,6 +242,13 @@ export default function MonitorDetailPage() {
           <AvailabilityChart days={dailyAvailability} />
         </Card>
       </section>
+
+      {/* Long-horizon analytics from the daily rollup (uptime, p95, regional). */}
+      {orgId ? (
+        <Card className="p-5">
+          <MonitorAnalytics orgId={orgId} monitorId={id} />
+        </Card>
+      ) : null}
 
       {/* Check history */}
       <Card className="overflow-hidden">
