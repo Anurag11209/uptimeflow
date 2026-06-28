@@ -10,6 +10,7 @@ import {
   Radar,
   Settings,
   Siren,
+  Wrench,
 } from "lucide-react";
 import { OrgSwitcher } from "@/components/org-switcher";
 import { SignOutButton } from "@/components/sign-out-button";
@@ -22,15 +23,12 @@ const NAV = [
   { href: "/dashboard/monitors", label: "Monitors", icon: Radar },
   { href: "/dashboard/incidents", label: "Incidents", icon: Siren },
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/dashboard/maintenance", label: "Maintenance", icon: Wrench },
   { href: "/dashboard/status-pages", label: "Status pages", icon: LayoutPanelTop },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { data: session, isPending } = useSession();
@@ -77,9 +75,7 @@ export default function DashboardLayout({
           </div>
 
           <div className="flex items-center gap-3">
-            <span className="hidden text-sm text-muted md:inline">
-              {session.user.email}
-            </span>
+            <span className="hidden text-sm text-muted md:inline">{session.user.email}</span>
             <SignOutButton />
           </div>
         </div>
@@ -88,9 +84,7 @@ export default function DashboardLayout({
       <div className="mx-auto flex w-full max-w-6xl gap-8 px-6 py-8">
         <nav className="hidden w-48 shrink-0 flex-col gap-1 md:flex">
           {NAV.map((item) => {
-            const active = item.exact
-              ? pathname === item.href
-              : pathname.startsWith(item.href);
+            const active = item.exact ? pathname === item.href : pathname.startsWith(item.href);
             const Icon = item.icon;
             return (
               <Link
@@ -98,9 +92,7 @@ export default function DashboardLayout({
                 href={item.href}
                 className={cn(
                   "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
-                  active
-                    ? "bg-panel text-text"
-                    : "text-muted hover:bg-panel/60 hover:text-text",
+                  active ? "bg-panel text-text" : "text-muted hover:bg-panel/60 hover:text-text",
                 )}
               >
                 <Icon className="size-4" />
