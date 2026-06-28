@@ -1,11 +1,13 @@
 import { randomBytes } from "node:crypto";
+import { Prisma } from "@backend-uptime/db";
 import type {
   ComponentStatus,
   MonitorHealth,
-  Prisma,
   PrismaClient,
   StatusPageIncidentImpact,
   StatusPageIncidentStatus,
+  StatusPageVisibility,
+  SubscriberStatus,
 } from "@backend-uptime/db";
 import { buildPage, type Page } from "@backend-uptime/shared";
 import { afterCursorDesc, parseCursor } from "./cursor.js";
@@ -71,15 +73,40 @@ export interface StatusHistory {
 
 // ───────────────────────────── Authed view types ────────────────────────────
 
+/**
+ * Free-form branding stored on StatusPage.branding (Json). Kept intentionally
+ * small and additive so the public renderer and the dashboard editor agree on
+ * the shape without a schema migration. `timezone` lives here too (no dedicated
+ * column) so operators can localize timestamps on the public page.
+ */
+export interface StatusPageBranding {
+  logoUrl?: string | null;
+  faviconUrl?: string | null;
+  accent?: string | null;
+  footerText?: string | null;
+  timezone?: string | null;
+  socialLinks?: { label: string; url: string }[];
+}
+
 export interface StatusPageSummary {
   id: string;
   name: string;
   slug: string;
   description: string | null;
   customDomain: string | null;
+  visibility: StatusPageVisibility;
+  /** Convenience flag kept for backward compatibility (visibility === PUBLIC). */
   isPublic: boolean;
+  branding: StatusPageBranding | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** List row: summary enriched with at-a-glance counts + rolled-up status. */
+export interface StatusPageListItem extends StatusPageSummary {
+  componentCount: number;
+  subscriberCount: number;
+  overallStatus: ComponentStatus;
 }
 
 export interface StatusPageComponentInput {
@@ -95,7 +122,10 @@ export interface StatusPageCreateInput {
   slug: string;
   description?: string | null;
   customDomain?: string | null;
+  /** Preferred tri-state; falls back to isPublic when omitted. */
+  visibility?: StatusPageVisibility;
   isPublic?: boolean;
+  branding?: StatusPageBranding | null;
   components?: StatusPageComponentInput[];
 }
 
@@ -104,6 +134,50 @@ export type StatusPageUpdateInput = Partial<Omit<StatusPageCreateInput, "compone
 export interface StatusPageListQuery {
   limit: number;
   cursor?: string;
+}
+
+// ── Component management (authed) ────────────────────────────────────────────
+
+export interface StatusComponent {
+  id: string;
+  monitorId: string | null;
+  name: string;
+  description: string | null;
+  groupName: string | null;
+  status: ComponentStatus;
+  position: number;
+  showUptime: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ComponentCreateInput {
+  monitorId?: string | null;
+  name: string;
+  description?: string | null;
+  groupName?: string | null;
+  status?: ComponentStatus;
+  showUptime?: boolean;
+  position?: number;
+}
+
+export type ComponentUpdateInput = Partial<ComponentCreateInput>;
+
+// ── Subscriber management (authed) ───────────────────────────────────────────
+
+export interface StatusSubscriber {
+  id: string;
+  email: string;
+  status: SubscriberStatus;
+  createdAt: Date;
+  verifiedAt: Date | null;
+  unsubscribedAt: Date | null;
+}
+
+export interface SubscriberListResult {
+  items: StatusSubscriber[];
+  nextCursor: string | null;
+  counts: { total: number; active: number; pending: number; unsubscribed: number };
 }
 
 export interface SubscribeResult {
@@ -153,7 +227,7 @@ export interface StatusNotifier {
 
 export interface StatusPageService {
   // Authed CRUD (org-scoped).
-  list(organizationId: string, query: StatusPageListQuery): Promise<Page<StatusPageSummary>>;
+  list(organizationId: string, query: StatusPageListQuery): Promise<Page<StatusPageListItem>>;
   get(organizationId: string, id: string): Promise<StatusPageSummary | null>;
   create(organizationId: string, input: StatusPageCreateInput, actor: StatusActor): Promise<StatusPageSummary>;
   update(
@@ -163,6 +237,44 @@ export interface StatusPageService {
     actor: StatusActor,
   ): Promise<StatusPageSummary | null>;
   remove(organizationId: string, id: string, actor: StatusActor): Promise<boolean>;
+  // Authed component management.
+  listComponents(organizationId: string, pageId: string): Promise<StatusComponent[] | null>;
+  createComponent(
+    organizationId: string,
+    pageId: string,
+    input: ComponentCreateInput,
+    actor: StatusActor,
+  ): Promise<StatusComponent | null>;
+  updateComponent(
+    organizationId: string,
+    pageId: string,
+    componentId: string,
+    input: ComponentUpdateInput,
+    actor: StatusActor,
+  ): Promise<StatusComponent | null>;
+  deleteComponent(
+    organizationId: string,
+    pageId: string,
+    componentId: string,
+    actor: StatusActor,
+  ): Promise<boolean>;
+  reorderComponents(
+    organizationId: string,
+    pageId: string,
+    orderedIds: string[],
+    actor: StatusActor,
+  ): Promise<StatusComponent[] | null>;
+  // Authed reads for the dashboard.
+  listIncidents(
+    organizationId: string,
+    pageId: string,
+    query: StatusPageListQuery,
+  ): Promise<Page<PublicStatusIncident> | null>;
+  listSubscribers(
+    organizationId: string,
+    pageId: string,
+    query: StatusPageListQuery,
+  ): Promise<SubscriberListResult | null>;
   // Authed incident lifecycle (drives subscriber notifications, Phase 7D).
   openIncident(
     organizationId: string,
@@ -267,11 +379,48 @@ const SUMMARY_SELECT = {
   description: true,
   customDomain: true,
   visibility: true,
+  branding: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.StatusPageSelect;
 
 type SummaryRow = Prisma.StatusPageGetPayload<{ select: typeof SUMMARY_SELECT }>;
+
+const COMPONENT_SELECT = {
+  id: true,
+  monitorId: true,
+  name: true,
+  description: true,
+  groupName: true,
+  status: true,
+  position: true,
+  showUptime: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.StatusPageComponentSelect;
+
+type ComponentRow = Prisma.StatusPageComponentGetPayload<{ select: typeof COMPONENT_SELECT }>;
+
+function toComponent(row: ComponentRow): StatusComponent {
+  return {
+    id: row.id,
+    monitorId: row.monitorId,
+    name: row.name,
+    description: row.description,
+    groupName: row.groupName,
+    status: row.status,
+    position: row.position,
+    showUptime: row.showUptime,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** Narrow the loosely-typed Json branding column to the editor's shape. */
+function toBranding(value: unknown): StatusPageBranding | null {
+  if (!value || typeof value !== "object") return null;
+  return value as StatusPageBranding;
+}
 
 function componentStatus(row: PageRow["components"][number]): ComponentStatus {
   const derived = row.monitor ? HEALTH_TO_STATUS[row.monitor.health] : undefined;
@@ -298,10 +447,22 @@ function toSummary(row: SummaryRow): StatusPageSummary {
     slug: row.slug,
     description: row.description,
     customDomain: row.customDomain,
+    visibility: row.visibility,
     isPublic: row.visibility === "PUBLIC",
+    branding: toBranding(row.branding),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/** Resolve the visibility to persist from the (preferred) enum or legacy flag. */
+function resolveVisibility(
+  visibility: StatusPageVisibility | undefined,
+  isPublic: boolean | undefined,
+): StatusPageVisibility | undefined {
+  if (visibility) return visibility;
+  if (isPublic === undefined) return undefined;
+  return isPublic ? "PUBLIC" : "PRIVATE";
 }
 
 function toPublicPage(row: PageRow): PublicStatusPage {
@@ -362,6 +523,15 @@ export function createStatusPageService(deps: {
     if (auditLogs) await auditLogs.log(event);
   }
 
+  /** True when the page exists and belongs to the org (tenant guard). */
+  async function pageInOrg(organizationId: string, pageId: string): Promise<boolean> {
+    const row = await prisma.statusPage.findFirst({
+      where: { id: pageId, organizationId, deletedAt: null },
+      select: { id: true },
+    });
+    return Boolean(row);
+  }
+
   /** Resolve a public (non-private, non-deleted) page id by slug. */
   async function publicPageBySlug(
     slug: string,
@@ -382,9 +552,36 @@ export function createStatusPageService(deps: {
         where: { AND: conditions },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: query.limit + 1,
-        select: SUMMARY_SELECT,
+        select: {
+          ...SUMMARY_SELECT,
+          components: { select: { status: true, monitor: { select: { health: true } } } },
+        },
       });
-      return buildPage(rows.map(toSummary), query.limit);
+
+      // One grouped query covers active-subscriber counts for the whole page.
+      const ids = rows.map((r) => r.id);
+      const subCounts = ids.length
+        ? await prisma.statusPageSubscriber.groupBy({
+            by: ["statusPageId"],
+            where: { statusPageId: { in: ids }, status: "ACTIVE" },
+            _count: { _all: true },
+          })
+        : [];
+      const subByPage = new Map(subCounts.map((s) => [s.statusPageId, s._count._all]));
+
+      const items: StatusPageListItem[] = rows.map((row) => {
+        const overall = row.components.reduce<ComponentStatus>((worst, c) => {
+          const s = c.monitor ? HEALTH_TO_STATUS[c.monitor.health] ?? c.status : c.status;
+          return STATUS_SEVERITY[s] > STATUS_SEVERITY[worst] ? s : worst;
+        }, "OPERATIONAL");
+        return {
+          ...toSummary(row),
+          componentCount: row.components.length,
+          subscriberCount: subByPage.get(row.id) ?? 0,
+          overallStatus: overall,
+        };
+      });
+      return buildPage(items, query.limit);
     },
 
     async get(organizationId, id) {
@@ -403,7 +600,8 @@ export function createStatusPageService(deps: {
           slug: input.slug,
           description: input.description ?? null,
           customDomain: input.customDomain ?? null,
-          visibility: input.isPublic === false ? "PRIVATE" : "PUBLIC",
+          visibility: resolveVisibility(input.visibility, input.isPublic) ?? "PUBLIC",
+          branding: (input.branding ?? undefined) as Prisma.InputJsonValue | undefined,
           createdById: actor.userId,
           updatedById: actor.userId,
           components: input.components?.length
@@ -445,7 +643,14 @@ export function createStatusPageService(deps: {
       if (input.slug !== undefined) data.slug = input.slug;
       if (input.description !== undefined) data.description = input.description;
       if (input.customDomain !== undefined) data.customDomain = input.customDomain;
-      if (input.isPublic !== undefined) data.visibility = input.isPublic ? "PUBLIC" : "PRIVATE";
+      const visibility = resolveVisibility(input.visibility, input.isPublic);
+      if (visibility !== undefined) data.visibility = visibility;
+      if (input.branding !== undefined) {
+        data.branding =
+          input.branding === null
+            ? Prisma.JsonNull
+            : (input.branding as Prisma.InputJsonValue);
+      }
 
       const row = await prisma.statusPage.update({ where: { id }, data, select: SUMMARY_SELECT });
       await audit({
@@ -482,6 +687,197 @@ export function createStatusPageService(deps: {
         userAgent: actor.userAgent,
       });
       return true;
+    },
+
+    // ── Authed component management ──────────────────────────────────────
+    async listComponents(organizationId, pageId) {
+      if (!(await pageInOrg(organizationId, pageId))) return null;
+      const rows = await prisma.statusPageComponent.findMany({
+        where: { statusPageId: pageId },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+        select: COMPONENT_SELECT,
+      });
+      return rows.map(toComponent);
+    },
+
+    async createComponent(organizationId, pageId, input, actor) {
+      if (!(await pageInOrg(organizationId, pageId))) return null;
+      // New components fall to the bottom unless an explicit position is given.
+      const last = await prisma.statusPageComponent.aggregate({
+        where: { statusPageId: pageId },
+        _max: { position: true },
+      });
+      const position = input.position ?? (last._max.position ?? -1) + 1;
+      const row = await prisma.statusPageComponent.create({
+        data: {
+          statusPageId: pageId,
+          monitorId: input.monitorId ?? null,
+          name: input.name,
+          description: input.description ?? null,
+          groupName: input.groupName ?? null,
+          status: input.status ?? "OPERATIONAL",
+          showUptime: input.showUptime ?? true,
+          position,
+        },
+        select: COMPONENT_SELECT,
+      });
+      await audit({
+        organizationId,
+        actorId: actor.userId,
+        actorType: actor.actorType,
+        action: "status_page.component_created",
+        resourceType: "statusPage",
+        resourceId: pageId,
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+        metadata: { componentId: row.id },
+      });
+      return toComponent(row);
+    },
+
+    async updateComponent(organizationId, pageId, componentId, input, actor) {
+      const existing = await prisma.statusPageComponent.findFirst({
+        where: { id: componentId, statusPageId: pageId, statusPage: { organizationId, deletedAt: null } },
+        select: { id: true },
+      });
+      if (!existing) return null;
+
+      const data: Prisma.StatusPageComponentUpdateInput = {};
+      if (input.name !== undefined) data.name = input.name;
+      if (input.description !== undefined) data.description = input.description;
+      if (input.groupName !== undefined) data.groupName = input.groupName;
+      if (input.status !== undefined) data.status = input.status;
+      if (input.showUptime !== undefined) data.showUptime = input.showUptime;
+      if (input.position !== undefined) data.position = input.position;
+      if (input.monitorId !== undefined) {
+        data.monitor = input.monitorId
+          ? { connect: { id: input.monitorId } }
+          : { disconnect: true };
+      }
+
+      const row = await prisma.statusPageComponent.update({
+        where: { id: componentId },
+        data,
+        select: COMPONENT_SELECT,
+      });
+      await audit({
+        organizationId,
+        actorId: actor.userId,
+        actorType: actor.actorType,
+        action: "status_page.component_updated",
+        resourceType: "statusPage",
+        resourceId: pageId,
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+        metadata: { componentId },
+      });
+      return toComponent(row);
+    },
+
+    async deleteComponent(organizationId, pageId, componentId, actor) {
+      const existing = await prisma.statusPageComponent.findFirst({
+        where: { id: componentId, statusPageId: pageId, statusPage: { organizationId, deletedAt: null } },
+        select: { id: true },
+      });
+      if (!existing) return false;
+      await prisma.statusPageComponent.delete({ where: { id: componentId } });
+      await audit({
+        organizationId,
+        actorId: actor.userId,
+        actorType: actor.actorType,
+        action: "status_page.component_deleted",
+        resourceType: "statusPage",
+        resourceId: pageId,
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+        metadata: { componentId },
+      });
+      return true;
+    },
+
+    async reorderComponents(organizationId, pageId, orderedIds, actor) {
+      if (!(await pageInOrg(organizationId, pageId))) return null;
+      // Only reposition ids that actually belong to this page; ignore strays so
+      // a stale client can't move another page's component.
+      const owned = await prisma.statusPageComponent.findMany({
+        where: { statusPageId: pageId },
+        select: { id: true },
+      });
+      const ownedIds = new Set(owned.map((c) => c.id));
+      const ordered = orderedIds.filter((id) => ownedIds.has(id));
+      await prisma.$transaction(
+        ordered.map((id, index) =>
+          prisma.statusPageComponent.update({ where: { id }, data: { position: index } }),
+        ),
+      );
+      await audit({
+        organizationId,
+        actorId: actor.userId,
+        actorType: actor.actorType,
+        action: "status_page.components_reordered",
+        resourceType: "statusPage",
+        resourceId: pageId,
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+      });
+      const rows = await prisma.statusPageComponent.findMany({
+        where: { statusPageId: pageId },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+        select: COMPONENT_SELECT,
+      });
+      return rows.map(toComponent);
+    },
+
+    // ── Authed reads for the dashboard ───────────────────────────────────
+    async listIncidents(organizationId, pageId, query) {
+      if (!(await pageInOrg(organizationId, pageId))) return null;
+      const cursor = parseCursor(query.cursor);
+      const conditions: Prisma.StatusPageIncidentWhereInput[] = [{ statusPageId: pageId }];
+      if (cursor) conditions.push(afterCursorDesc(cursor));
+      const rows = await prisma.statusPageIncident.findMany({
+        where: { AND: conditions },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: query.limit + 1,
+        select: INCIDENT_SELECT,
+      });
+      return buildPage(rows.map(toIncident), query.limit);
+    },
+
+    async listSubscribers(organizationId, pageId, query) {
+      if (!(await pageInOrg(organizationId, pageId))) return null;
+      const cursor = parseCursor(query.cursor);
+      const conditions: Prisma.StatusPageSubscriberWhereInput[] = [{ statusPageId: pageId }];
+      if (cursor) conditions.push(afterCursorDesc(cursor));
+      const [rows, grouped] = await Promise.all([
+        prisma.statusPageSubscriber.findMany({
+          where: { AND: conditions },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: query.limit + 1,
+          select: {
+            id: true,
+            email: true,
+            status: true,
+            createdAt: true,
+            verifiedAt: true,
+            unsubscribedAt: true,
+          },
+        }),
+        prisma.statusPageSubscriber.groupBy({
+          by: ["status"],
+          where: { statusPageId: pageId },
+          _count: { _all: true },
+        }),
+      ]);
+      const counts = { total: 0, active: 0, pending: 0, unsubscribed: 0 };
+      for (const g of grouped) {
+        const n = g._count._all;
+        counts.total += n;
+        if (g.status === "ACTIVE") counts.active = n;
+        else if (g.status === "PENDING") counts.pending = n;
+        else if (g.status === "UNSUBSCRIBED") counts.unsubscribed = n;
+      }
+      const page = buildPage(rows, query.limit);
+      return { items: page.items, nextCursor: page.nextCursor, counts };
     },
 
     // ── Authed incident lifecycle ────────────────────────────────────────
