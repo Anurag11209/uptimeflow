@@ -1,0 +1,21 @@
+# Local provider/plugin cache and state — never commit.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Local variable overrides may contain account-specific values — keep them out.
+# The non-secret environments/*.tfvars and terraform.tfvars.example ARE committed.
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Plan output artifacts
+*.tfplan
+
+# The provider lock file IS committed (pinned, multi-platform) — do not ignore it.
+!.terraform.lock.hcl
