@@ -42,15 +42,30 @@ export interface PublicStatusIncident {
   updates: PublicStatusIncidentUpdate[];
 }
 
+export interface StatusPageBranding {
+  logoUrl?: string | null;
+  faviconUrl?: string | null;
+  accent?: string | null;
+  footerText?: string | null;
+  timezone?: string | null;
+  socialLinks?: { label: string; url: string }[];
+}
+
 export interface PublicStatusPage {
   name: string;
   slug: string;
   description: string | null;
-  branding: { logoUrl?: string; accent?: string } | null;
+  branding: StatusPageBranding | null;
   overallStatus: ComponentStatus;
   components: PublicStatusComponent[];
   activeIncidents: PublicStatusIncident[];
   updatedAt: string;
+}
+
+/** Hex-validate an accent before using it as an inline CSS value. */
+export function safeAccent(accent: string | null | undefined): string | null {
+  if (!accent) return null;
+  return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(accent) ? accent : null;
 }
 
 export interface StatusHistoryDay {
