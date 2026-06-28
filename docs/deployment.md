@@ -28,6 +28,12 @@ docker compose up --build
 
 ## Production architecture (AWS)
 
+> **Now codified as Terraform** in [`infra/terraform`](../infra/terraform/README.md).
+> The diagram below is implemented by those modules (VPC, ALB, ECS Fargate, RDS,
+> ElastiCache, S3, SES, Secrets Manager, CloudWatch, ECR, GitHub OIDC). Deploy
+> with `terraform apply -var-file=environments/<env>.tfvars`. Backup/restore is in
+> [`docs/disaster-recovery.md`](./disaster-recovery.md).
+
 ```
 Cloudflare (TLS, WAF, DNS)
         │
@@ -141,10 +147,13 @@ endpoint with the bearer token. Alert on readiness failures, error-envelope
 
 ### Backups & DR
 
-- RDS automated backups + point-in-time recovery; periodic snapshots retained
-  cross-region.
+Full runbook (objectives, restore commands, region rebuild):
+[`docs/disaster-recovery.md`](./disaster-recovery.md). In short:
+
+- RDS automated backups + point-in-time recovery (`db_backup_retention_days`,
+  prod 30); Multi-AZ in production.
 - ElastiCache holds sessions and queues — treat as recoverable, not the system
   of record. A failover signs users out (they re-authenticate) and re-drives
   unacked jobs.
-- Keep the audit log shipped to durable, append-only storage (e.g. S3) for
-  compliance retention.
+- The audit log is archived to the versioned S3 bucket (`audit_logs_bucket`
+  output) for compliance retention.
