@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars (gitignored) or use environments/<env>.tfvars with
+#   terraform plan -var-file=environments/production.tfvars
+# No secrets belong here — application secrets live in Secrets Manager.
+
+environment = "production"
+aws_region  = "us-east-1"
+
+domain_name = "uptimeflow.in"
+web_domain  = "app.uptimeflow.in"
+api_domain  = "api.uptimeflow.in"
+
+# Request/import an ACM cert in aws_region covering web_domain + api_domain,
+# then paste its ARN here (the HTTPS listener requires it).
+acm_certificate_arn = ""
+
+# Optional: Route53 zone for automatic ACM/SES/DNS records. Empty = manage DNS
+# elsewhere (e.g. Cloudflare) using the module outputs.
+route53_zone_id = ""
+
+# GitHub repo allowed to assume the OIDC deploy role.
+github_owner = "Anurag11209"
+github_repo  = "uptimeflow"
+
+alarm_email = "ops@uptimeflow.in"
