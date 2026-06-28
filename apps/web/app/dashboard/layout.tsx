@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import {
   Activity,
+  BarChart3,
   CreditCard,
   Globe,
   LayoutPanelTop,
@@ -24,6 +25,7 @@ const NAV = [
   { href: "/dashboard", label: "Overview", icon: Activity, exact: true },
   { href: "/dashboard/monitors", label: "Monitors", icon: Radar },
   { href: "/dashboard/incidents", label: "Incidents", icon: Siren },
+  { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/dashboard/status-pages", label: "Status pages", icon: LayoutPanelTop },
   { href: "/dashboard/settings/members", label: "Members", icon: Users },
   { href: "/dashboard/settings/integrations", label: "Integrations", icon: Plug },

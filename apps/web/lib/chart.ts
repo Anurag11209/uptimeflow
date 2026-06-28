@@ -56,3 +56,51 @@ export function average(values: number[]): number | null {
   if (values.length === 0) return null;
   return values.reduce((sum, v) => sum + v, 0) / values.length;
 }
+
+/**
+ * Build a closed SVG area path: the line over `points`, dropped to the baseline
+ * and back, so it can be filled. Shares the line geometry with buildLinePath.
+ */
+export function buildAreaPath(
+  points: ChartPoint[],
+  width: number,
+  height: number,
+  max: number,
+): string {
+  if (points.length === 0) return "";
+  const line = buildLinePath(points, width, height, max);
+  const lastX = points.length > 1 ? width : 0;
+  return `${line} L${lastX.toFixed(2)} ${height.toFixed(2)} L0.00 ${height.toFixed(2)} Z`;
+}
+
+/**
+ * SVG arc segments for a donut/pie chart. Returns one path `d` per value with
+ * its fraction of the whole, so callers can color and label each slice. A
+ * zero total yields an empty list.
+ */
+export function donutSegments(
+  values: number[],
+  radius = 16,
+  cx = 18,
+  cy = 18,
+): { d: string; fraction: number }[] {
+  const total = values.reduce((a, b) => a + b, 0);
+  if (total <= 0) return [];
+  let angle = -Math.PI / 2; // start at 12 o'clock
+  return values.map((v) => {
+    const fraction = v / total;
+    const next = angle + fraction * Math.PI * 2;
+    const x1 = cx + radius * Math.cos(angle);
+    const y1 = cy + radius * Math.sin(angle);
+    const x2 = cx + radius * Math.cos(next);
+    const y2 = cy + radius * Math.sin(next);
+    const largeArc = fraction > 0.5 ? 1 : 0;
+    // A single arc can't close a full circle — nudge the endpoint for a lone slice.
+    const d =
+      fraction >= 1
+        ? `M${cx} ${cy - radius} A${radius} ${radius} 0 1 1 ${(cx - 0.001).toFixed(3)} ${cy - radius} Z`
+        : `M${cx} ${cy} L${x1.toFixed(3)} ${y1.toFixed(3)} A${radius} ${radius} 0 ${largeArc} 1 ${x2.toFixed(3)} ${y2.toFixed(3)} Z`;
+    angle = next;
+    return { d, fraction };
+  });
+}
