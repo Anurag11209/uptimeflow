@@ -27,12 +27,35 @@ const componentSchema = z.object({
   sortOrder: z.number().int().min(0).optional(),
 });
 
+const visibilitySchema = z.enum(["PUBLIC", "UNLISTED", "PRIVATE"]);
+
+// Optional hex (#fff / #ffffff) so the public renderer can trust the value as a
+// CSS color without sanitizing arbitrary strings.
+const hexColor = z
+  .string()
+  .trim()
+  .regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "Use a hex color like #2fd180.");
+
+const brandingSchema = z.object({
+  logoUrl: z.string().trim().url().max(2048).nullish(),
+  faviconUrl: z.string().trim().url().max(2048).nullish(),
+  accent: hexColor.nullish(),
+  footerText: z.string().trim().max(500).nullish(),
+  timezone: z.string().trim().max(64).nullish(),
+  socialLinks: z
+    .array(z.object({ label: z.string().trim().min(1).max(40), url: z.string().trim().url().max(2048) }))
+    .max(10)
+    .optional(),
+});
+
 const createSchema = z.object({
   name: z.string().trim().min(1).max(120),
   slug: slugSchema,
   description: z.string().trim().max(1000).nullish(),
   customDomain: z.string().trim().max(253).nullish(),
+  visibility: visibilitySchema.optional(),
   isPublic: z.boolean().optional(),
+  branding: brandingSchema.nullish(),
   components: z.array(componentSchema).max(100).optional(),
 });
 
@@ -42,10 +65,38 @@ const updateSchema = z
     slug: slugSchema,
     description: z.string().trim().max(1000).nullish(),
     customDomain: z.string().trim().max(253).nullish(),
+    visibility: visibilitySchema,
     isPublic: z.boolean(),
+    branding: brandingSchema.nullish(),
   })
   .partial()
   .refine((v) => Object.keys(v).length > 0, "At least one field is required.");
+
+const componentStatusEnum = z.enum([
+  "OPERATIONAL",
+  "DEGRADED_PERFORMANCE",
+  "PARTIAL_OUTAGE",
+  "MAJOR_OUTAGE",
+  "UNDER_MAINTENANCE",
+]);
+
+const componentCreateSchema = z.object({
+  monitorId: z.string().uuid().nullish(),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).nullish(),
+  groupName: z.string().trim().max(120).nullish(),
+  status: componentStatusEnum.optional(),
+  showUptime: z.boolean().optional(),
+  position: z.number().int().min(0).optional(),
+});
+
+const componentUpdateSchema = componentCreateSchema
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, "At least one field is required.");
+
+const reorderSchema = z.object({
+  orderedIds: z.array(z.string().uuid()).min(1).max(200),
+});
 
 const incidentImpact = z.enum(["NONE", "MINOR", "MAJOR", "CRITICAL", "MAINTENANCE"]);
 const incidentStatus = z.enum(["INVESTIGATING", "IDENTIFIED", "MONITORING", "RESOLVED"]);
@@ -79,6 +130,12 @@ function actorOf(req: Request): StatusActor {
 function pageIdOf(req: Request): string {
   const id = req.params.id;
   if (typeof id !== "string" || id.length === 0) throw AppError.notFound("Status page not found.");
+  return id;
+}
+
+function componentIdOf(req: Request): string {
+  const id = req.params.componentId;
+  if (typeof id !== "string" || id.length === 0) throw AppError.notFound("Component not found.");
   return id;
 }
 
@@ -150,6 +207,123 @@ export function statusPagesAuthedRouter(deps: StatusPagesAuthedRouterDeps): Rout
     if (!ok) throw AppError.notFound("Status page not found.");
     res.status(204).end();
   });
+
+  // ── Components ─────────────────────────────────────────────────────────────
+  router.get("/:id/components", requirePermission("statusPage", "read"), async (req, res) => {
+    const rows = await deps.statusPages.listComponents(req.orgContext!.organizationId, pageIdOf(req));
+    if (!rows) throw AppError.notFound("Status page not found.");
+    res.json({ items: rows });
+  });
+
+  router.post(
+    "/:id/components",
+    requirePermission("statusPage", "update"),
+    validate({ body: componentCreateSchema }),
+    async (req, res) => {
+      const input = getValidated<z.infer<typeof componentCreateSchema>>(req, "body");
+      try {
+        const row = await deps.statusPages.createComponent(
+          req.orgContext!.organizationId,
+          pageIdOf(req),
+          input,
+          actorOf(req),
+        );
+        if (!row) throw AppError.notFound("Status page not found.");
+        res.status(201).json(row);
+      } catch (err) {
+        throw mapWriteError(err);
+      }
+    },
+  );
+
+  // Bulk reorder must precede the parameterized :componentId routes.
+  router.post(
+    "/:id/components/reorder",
+    requirePermission("statusPage", "update"),
+    validate({ body: reorderSchema }),
+    async (req, res) => {
+      const input = getValidated<z.infer<typeof reorderSchema>>(req, "body");
+      const rows = await deps.statusPages.reorderComponents(
+        req.orgContext!.organizationId,
+        pageIdOf(req),
+        input.orderedIds,
+        actorOf(req),
+      );
+      if (!rows) throw AppError.notFound("Status page not found.");
+      res.json({ items: rows });
+    },
+  );
+
+  router.patch(
+    "/:id/components/:componentId",
+    requirePermission("statusPage", "update"),
+    validate({ body: componentUpdateSchema }),
+    async (req, res) => {
+      const input = getValidated<z.infer<typeof componentUpdateSchema>>(req, "body");
+      try {
+        const row = await deps.statusPages.updateComponent(
+          req.orgContext!.organizationId,
+          pageIdOf(req),
+          componentIdOf(req),
+          input,
+          actorOf(req),
+        );
+        if (!row) throw AppError.notFound("Component not found.");
+        res.json(row);
+      } catch (err) {
+        throw mapWriteError(err);
+      }
+    },
+  );
+
+  router.delete(
+    "/:id/components/:componentId",
+    requirePermission("statusPage", "update"),
+    async (req, res) => {
+      const ok = await deps.statusPages.deleteComponent(
+        req.orgContext!.organizationId,
+        pageIdOf(req),
+        componentIdOf(req),
+        actorOf(req),
+      );
+      if (!ok) throw AppError.notFound("Component not found.");
+      res.status(204).end();
+    },
+  );
+
+  // ── Subscribers (read-only management view) ────────────────────────────────
+  router.get(
+    "/:id/subscribers",
+    requirePermission("statusPage", "read"),
+    validate({ query: paginationQuerySchema }),
+    async (req, res) => {
+      const query = getValidated<StatusPageListQuery>(req, "query");
+      const result = await deps.statusPages.listSubscribers(
+        req.orgContext!.organizationId,
+        pageIdOf(req),
+        query,
+      );
+      if (!result) throw AppError.notFound("Status page not found.");
+      res.json(result);
+    },
+  );
+
+  // ── Incidents (authed list for the dashboard) ──────────────────────────────
+  router.get(
+    "/:id/incidents",
+    requirePermission("statusPage", "read"),
+    validate({ query: paginationQuerySchema }),
+    async (req, res) => {
+      const query = getValidated<StatusPageListQuery>(req, "query");
+      const result = await deps.statusPages.listIncidents(
+        req.orgContext!.organizationId,
+        pageIdOf(req),
+        query,
+      );
+      if (!result) throw AppError.notFound("Status page not found.");
+      res.json(result);
+    },
+  );
 
   router.post(
     "/:id/incidents",

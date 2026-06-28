@@ -9,6 +9,7 @@ import {
   incidentStatusLabel,
   isAllOperational,
   overallHeadline,
+  safeAccent,
   uptimeBarColor,
   uptimeTone,
   type PublicStatusComponent,
@@ -24,13 +25,40 @@ interface PageProps {
   params: Promise<{ slug: string }>;
 }
 
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "";
+
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
   const page = await fetchStatusPage(slug);
-  if (!page) return { title: "Status page not found" };
+  if (!page) return { title: "Status page not found", robots: { index: false } };
+
+  const title = `${page.name} Status`;
+  const description =
+    page.description ?? `Live status, uptime, and incident history for ${page.name}.`;
+  const url = APP_URL ? `${APP_URL}/status/${page.slug}` : "";
+  const favicon = page.branding?.faviconUrl ?? undefined;
+
   return {
-    title: `${page.name} Status`,
-    description: page.description ?? `Live status and uptime for ${page.name}.`,
+    title,
+    description,
+    metadataBase: APP_URL ? new URL(APP_URL) : undefined,
+    alternates: url ? { canonical: url } : undefined,
+    icons: favicon ? { icon: favicon } : undefined,
+    robots: { index: true, follow: true },
+    openGraph: {
+      type: "website",
+      title,
+      description,
+      url: url || undefined,
+      siteName: page.name,
+      images: page.branding?.logoUrl ? [{ url: page.branding.logoUrl }] : undefined,
+    },
+    twitter: {
+      card: "summary",
+      title,
+      description,
+      images: page.branding?.logoUrl ? [page.branding.logoUrl] : undefined,
+    },
   };
 }
 
@@ -47,20 +75,59 @@ export default async function StatusPage({ params }: PageProps) {
   const historyById = new Map((history?.components ?? []).map((c) => [c.id, c]));
   const resolved = (incidents?.items ?? []).filter((i) => i.resolvedAt !== null).slice(0, 10);
 
+  // Maintenance is modeled as an incident with MAINTENANCE impact; surface it in
+  // its own section rather than alongside outages.
+  const activeIncidents = page.activeIncidents.filter((i) => i.impact !== "MAINTENANCE");
+  const maintenance = page.activeIncidents.filter((i) => i.impact === "MAINTENANCE");
+
+  const tz = page.branding?.timezone ?? "UTC";
+  const accent = safeAccent(page.branding?.accent);
+  // Re-theme the brand accent for this page only (cascades to brand-toned UI).
+  const accentStyle = accent ? ({ "--color-brand": accent } as React.CSSProperties) : undefined;
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: `${page.name} Status`,
+    description: page.description ?? `Live status and uptime for ${page.name}.`,
+  };
+
   return (
-    <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:py-14">
+    <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:py-14" style={accentStyle}>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       <Hero page={page} overallUptime={history?.overallUptimePct ?? null} />
       <div className="mt-8 flex flex-col gap-8">
-        {page.activeIncidents.length > 0 ? <ActiveIncidents incidents={page.activeIncidents} /> : null}
+        {activeIncidents.length > 0 ? <ActiveIncidents incidents={activeIncidents} tz={tz} /> : null}
+        {maintenance.length > 0 ? <MaintenanceSection incidents={maintenance} tz={tz} /> : null}
         <Components components={page.components} historyById={historyById} />
         {history ? <UptimeSection history={history} /> : null}
-        {resolved.length > 0 ? <IncidentHistory incidents={resolved} /> : null}
+        {resolved.length > 0 ? <IncidentHistory incidents={resolved} tz={tz} /> : null}
         <SubscribeSection slug={page.slug} />
       </div>
-      <footer className="mt-12 text-center text-xs text-muted">
-        Powered by UptimeFlow · Updated {formatDateTime(page.updatedAt)}
-      </footer>
+      <Footer page={page} tz={tz} />
     </main>
+  );
+}
+
+function Footer({ page, tz }: { page: PublicStatusPage; tz: string }) {
+  const links = page.branding?.socialLinks ?? [];
+  return (
+    <footer className="mt-12 flex flex-col items-center gap-3 text-center text-xs text-muted">
+      {links.length > 0 ? (
+        <div className="flex flex-wrap justify-center gap-4">
+          {links.map((l) => (
+            <a key={l.url} href={l.url} target="_blank" rel="noreferrer" className="hover:text-brand">
+              {l.label}
+            </a>
+          ))}
+        </div>
+      ) : null}
+      {page.branding?.footerText ? <p className="text-text/80">{page.branding.footerText}</p> : null}
+      <p>Powered by UptimeFlow · Updated {formatDateTime(page.updatedAt, tz)}</p>
+    </footer>
   );
 }
 
@@ -71,8 +138,19 @@ function Hero({ page, overallUptime }: { page: PublicStatusPage; overallUptime: 
   const meta = componentStatusMeta(page.overallStatus);
   return (
     <header>
-      <div className="flex items-center gap-2 text-sm text-muted">
-        <span className="font-[family-name:var(--font-mono)] uppercase tracking-wide">{page.name}</span>
+      <div className="flex items-center gap-3 text-sm text-muted">
+        {page.branding?.logoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={page.branding.logoUrl}
+            alt={`${page.name} logo`}
+            className="h-8 w-auto max-w-[180px] object-contain"
+          />
+        ) : (
+          <span className="font-[family-name:var(--font-mono)] uppercase tracking-wide">
+            {page.name}
+          </span>
+        )}
       </div>
       <h1 className="mt-3 font-[family-name:var(--font-display)] text-2xl font-semibold text-text sm:text-3xl">
         {page.description ?? `${page.name} status`}
@@ -216,7 +294,7 @@ function UptimeSection({ history }: { history: StatusHistory }) {
 
 // ─────────────────────────────── Incidents ──────────────────────────────────
 
-function ActiveIncidents({ incidents }: { incidents: PublicStatusIncident[] }) {
+function ActiveIncidents({ incidents, tz }: { incidents: PublicStatusIncident[]; tz: string }) {
   return (
     <section aria-labelledby="active-heading">
       <Card className="border-warn/40">
@@ -235,7 +313,7 @@ function ActiveIncidents({ incidents }: { incidents: PublicStatusIncident[] }) {
                   <li key={i} className="relative">
                     <span className="absolute -left-[21px] top-1 size-2 rounded-full bg-warn" aria-hidden />
                     <p className="text-xs font-medium text-muted">
-                      {incidentStatusLabel(u.status)} · {formatDateTime(u.createdAt)}
+                      {incidentStatusLabel(u.status)} · {formatDateTime(u.createdAt, tz)}
                     </p>
                     <p className="text-sm text-text">{u.body}</p>
                   </li>
@@ -249,7 +327,41 @@ function ActiveIncidents({ incidents }: { incidents: PublicStatusIncident[] }) {
   );
 }
 
-function IncidentHistory({ incidents }: { incidents: PublicStatusIncident[] }) {
+function MaintenanceSection({ incidents, tz }: { incidents: PublicStatusIncident[]; tz: string }) {
+  return (
+    <section aria-labelledby="maintenance-heading">
+      <Card>
+        <CardHeader>
+          <CardTitle id="maintenance-heading">Scheduled maintenance</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          {incidents.map((incident) => (
+            <article key={incident.id}>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-text">{incident.title}</h3>
+                <Badge tone="muted">{incidentStatusLabel(incident.status)}</Badge>
+              </div>
+              <p className="mt-1 text-xs text-muted">Starts {formatDateTime(incident.startedAt, tz)}</p>
+              <ol className="mt-3 flex flex-col gap-3 border-l border-line-soft pl-4">
+                {incident.updates.map((u, i) => (
+                  <li key={i} className="relative">
+                    <span className="absolute -left-[21px] top-1 size-2 rounded-full bg-muted" aria-hidden />
+                    <p className="text-xs font-medium text-muted">
+                      {incidentStatusLabel(u.status)} · {formatDateTime(u.createdAt, tz)}
+                    </p>
+                    <p className="text-sm text-text">{u.body}</p>
+                  </li>
+                ))}
+              </ol>
+            </article>
+          ))}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function IncidentHistory({ incidents, tz }: { incidents: PublicStatusIncident[]; tz: string }) {
   return (
     <section aria-labelledby="history-heading">
       <Card>
@@ -262,7 +374,7 @@ function IncidentHistory({ incidents }: { incidents: PublicStatusIncident[] }) {
               <li key={incident.id} className="flex items-center justify-between gap-4">
                 <span className="truncate text-sm text-text">{incident.title}</span>
                 <span className="shrink-0 text-xs text-muted">
-                  Resolved {incident.resolvedAt ? formatDate(incident.resolvedAt) : ""}
+                  Resolved {incident.resolvedAt ? formatDate(incident.resolvedAt, tz) : ""}
                 </span>
               </li>
             ))}
@@ -312,18 +424,41 @@ function toneText(tone: ReturnType<typeof uptimeTone>): string {
   return tone === "up" ? "text-up" : tone === "down" ? "text-down" : tone === "brand" ? "text-warn" : "text-muted";
 }
 
-function formatDateTime(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: "UTC",
-  }).format(new Date(iso));
+/** Format a timestamp in the page's configured timezone, falling back to UTC. */
+function formatDateTime(iso: string, tz = "UTC"): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: tz,
+    }).format(new Date(iso));
+  } catch {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: "UTC",
+    }).format(new Date(iso));
+  }
 }
 
-function formatDate(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(
-    new Date(iso),
-  );
+function formatDate(iso: string, tz = "UTC"): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      timeZone: tz,
+    }).format(new Date(iso));
+  } catch {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(iso));
+  }
 }

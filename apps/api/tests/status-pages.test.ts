@@ -5,8 +5,10 @@ import { buildServer, headerGetSession } from "./helpers.js";
 import type {
   PublicStatusIncident,
   PublicStatusPage,
+  StatusComponent,
   StatusPageService,
   StatusPageSummary,
+  StatusSubscriber,
 } from "../src/services/status-page.service.js";
 
 // ───────────────────────────── Fixtures ─────────────────────────────────────
@@ -42,9 +44,33 @@ const summary: StatusPageSummary = {
   slug: "uptimeflow",
   description: null,
   customDomain: null,
+  visibility: "PUBLIC",
   isPublic: true,
+  branding: null,
   createdAt: new Date("2026-06-15T00:00:00Z"),
   updatedAt: new Date("2026-06-15T00:00:00Z"),
+};
+
+const exampleComponent: StatusComponent = {
+  id: "cmp_1",
+  monitorId: null,
+  name: "API",
+  description: null,
+  groupName: null,
+  status: "OPERATIONAL",
+  position: 0,
+  showUptime: true,
+  createdAt: new Date("2026-06-15T00:00:00Z"),
+  updatedAt: new Date("2026-06-15T00:00:00Z"),
+};
+
+const exampleSubscriber: StatusSubscriber = {
+  id: "sub_1",
+  email: "ops@example.com",
+  status: "ACTIVE",
+  createdAt: new Date("2026-06-15T00:00:00Z"),
+  verifiedAt: new Date("2026-06-15T00:00:00Z"),
+  unsubscribedAt: null,
 };
 
 function fakeStatusPages(over: Partial<StatusPageService> = {}): StatusPageService {
@@ -54,6 +80,29 @@ function fakeStatusPages(over: Partial<StatusPageService> = {}): StatusPageServi
     create: async (_org, input) => ({ ...summary, name: input.name, slug: input.slug }),
     update: async (_org, id, input) => (id === "sp_1" ? { ...summary, ...input } : null),
     remove: async (_org, id) => id === "sp_1",
+    listComponents: async (_org, pageId) => (pageId === "sp_1" ? [exampleComponent] : null),
+    createComponent: async (_org, pageId, input) =>
+      pageId === "sp_1" ? { ...exampleComponent, name: input.name } : null,
+    updateComponent: async (_org, pageId, componentId, input) =>
+      pageId === "sp_1" && componentId === "cmp_1"
+        ? { ...exampleComponent, ...input }
+        : null,
+    deleteComponent: async (_org, pageId, componentId) =>
+      pageId === "sp_1" && componentId === "cmp_1",
+    reorderComponents: async (_org, pageId, orderedIds) =>
+      pageId === "sp_1"
+        ? orderedIds.map((id, i) => ({ ...exampleComponent, id, position: i }))
+        : null,
+    listIncidents: async (_org, pageId) =>
+      pageId === "sp_1" ? { items: [exampleIncident], nextCursor: null } : null,
+    listSubscribers: async (_org, pageId) =>
+      pageId === "sp_1"
+        ? {
+            items: [exampleSubscriber],
+            nextCursor: null,
+            counts: { total: 1, active: 1, pending: 0, unsubscribed: 0 },
+          }
+        : null,
     openIncident: async (_org, pageId, input) =>
       pageId === "sp_1" ? { ...exampleIncident, title: input.title } : null,
     addIncidentUpdate: async (_org, pageId, incidentId, input) =>
@@ -242,5 +291,114 @@ describe("authed status page CRUD", () => {
       .send({ status: "RESOLVED", body: "Fixed." });
     expect(resolve.status).toBe(201);
     expect(resolve.body.status).toBe("RESOLVED");
+  });
+
+  it("accepts a tri-state visibility and branding on create", async () => {
+    const res = await request(authedApp("developer"))
+      .post(ORG)
+      .set("x-test-user", "u1")
+      .send({
+        name: "Branded",
+        slug: "branded",
+        visibility: "UNLISTED",
+        branding: { accent: "#2fd180", footerText: "© Acme" },
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it("rejects a non-hex accent color", async () => {
+    const res = await request(authedApp("developer"))
+      .post(ORG)
+      .set("x-test-user", "u1")
+      .send({ name: "Bad", slug: "bad", branding: { accent: "red" } });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("status page components, subscribers & incident list", () => {
+  it("lists components for a page (404 for unknown page)", async () => {
+    const res = await request(authedApp("viewer")).get(`${ORG}/sp_1/components`).set("x-test-user", "u1");
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0]).toMatchObject({ id: "cmp_1", name: "API" });
+
+    const missing = await request(authedApp("viewer"))
+      .get(`${ORG}/nope/components`)
+      .set("x-test-user", "u1");
+    expect(missing.status).toBe(404);
+  });
+
+  it("requires statusPage:update to create a component", async () => {
+    const forbidden = await request(authedApp("viewer"))
+      .post(`${ORG}/sp_1/components`)
+      .set("x-test-user", "u1")
+      .send({ name: "Webhooks" });
+    expect(forbidden.status).toBe(403);
+
+    const ok = await request(authedApp("developer"))
+      .post(`${ORG}/sp_1/components`)
+      .set("x-test-user", "u1")
+      .send({ name: "Webhooks" });
+    expect(ok.status).toBe(201);
+    expect(ok.body.name).toBe("Webhooks");
+  });
+
+  it("validates the component status enum", async () => {
+    const res = await request(authedApp("developer"))
+      .post(`${ORG}/sp_1/components`)
+      .set("x-test-user", "u1")
+      .send({ name: "X", status: "ON_FIRE" });
+    expect(res.status).toBe(400);
+  });
+
+  it("updates and deletes a component", async () => {
+    const patch = await request(authedApp("developer"))
+      .patch(`${ORG}/sp_1/components/cmp_1`)
+      .set("x-test-user", "u1")
+      .send({ status: "MAJOR_OUTAGE" });
+    expect(patch.status).toBe(200);
+    expect(patch.body.status).toBe("MAJOR_OUTAGE");
+
+    const del = await request(authedApp("developer"))
+      .delete(`${ORG}/sp_1/components/cmp_1`)
+      .set("x-test-user", "u1");
+    expect(del.status).toBe(204);
+
+    const delMissing = await request(authedApp("developer"))
+      .delete(`${ORG}/sp_1/components/zzz`)
+      .set("x-test-user", "u1");
+    expect(delMissing.status).toBe(404);
+  });
+
+  it("reorders components", async () => {
+    const id1 = "11111111-1111-4111-8111-111111111111";
+    const id2 = "22222222-2222-4222-8222-222222222222";
+    const res = await request(authedApp("developer"))
+      .post(`${ORG}/sp_1/components/reorder`)
+      .set("x-test-user", "u1")
+      .send({ orderedIds: [id2, id1] });
+    expect(res.status).toBe(200);
+    expect(res.body.items.map((c: { id: string }) => c.id)).toEqual([id2, id1]);
+  });
+
+  it("rejects an empty reorder payload", async () => {
+    const res = await request(authedApp("developer"))
+      .post(`${ORG}/sp_1/components/reorder`)
+      .set("x-test-user", "u1")
+      .send({ orderedIds: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it("lists subscribers with counts", async () => {
+    const res = await request(authedApp("viewer")).get(`${ORG}/sp_1/subscribers`).set("x-test-user", "u1");
+    expect(res.status).toBe(200);
+    expect(res.body.counts).toMatchObject({ total: 1, active: 1 });
+    expect(res.body.items[0].email).toBe("ops@example.com");
+  });
+
+  it("lists all incidents for a page (authed)", async () => {
+    const res = await request(authedApp("viewer")).get(`${ORG}/sp_1/incidents`).set("x-test-user", "u1");
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
   });
 });
