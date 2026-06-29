@@ -13,6 +13,7 @@ import {
   UserCog,
   Users,
   BellRing,
+  GitMerge,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,7 @@ const SETTINGS_NAV = [
   { href: "/dashboard/settings/api-keys", label: "API keys", icon: KeyRound },
   { href: "/dashboard/settings/integrations", label: "Integrations", icon: Plug },
   { href: "/dashboard/settings/alert-channels", label: "Alert Channels", icon: BellRing },
+  { href: "/dashboard/settings/escalation-policies", label: "Escalation", icon: GitMerge },
   { href: "/dashboard/settings/domains", label: "Domains", icon: Globe },
   { href: "/dashboard/settings/audit-logs", label: "Audit logs", icon: ScrollText },
   { href: "/dashboard/settings/profile", label: "Profile", icon: UserCog },
