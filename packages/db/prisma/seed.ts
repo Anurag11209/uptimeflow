@@ -138,8 +138,8 @@ const PLANS: Array<{
 /** Optional per-tier Stripe ids from env, e.g. STRIPE_PRICE_GROWTH / STRIPE_PRODUCT_GROWTH. */
 function stripeIds(tier: PlanTier): { stripePriceId: string | null; stripeProductId: string | null } {
   return {
-    stripePriceId: process.env[`STRIPE_PRICE_${tier}`] ?? null,
-    stripeProductId: process.env[`STRIPE_PRODUCT_${tier}`] ?? null,
+    stripePriceId: process.env[`STRIPE_PRICE_${tier}`] || null,
+    stripeProductId: process.env[`STRIPE_PRODUCT_${tier}`] || null,
   };
 }
 
