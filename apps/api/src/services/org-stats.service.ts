@@ -3,7 +3,6 @@ import type { PrismaClient } from "@backend-uptime/db";
 export interface OrgOverview {
   members: number;
   pendingInvitations: number;
-  /** Phase 2 wires these to real monitor + incident tables. */
   monitors: number;
   openIncidents: number;
   auditEventsLast30d: number;
@@ -19,21 +18,26 @@ export function createOrgStatsService(deps: { prisma: PrismaClient }): OrgStatsS
   return {
     async getOverview(organizationId) {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const [members, pendingInvitations, auditEventsLast30d] = await Promise.all([
-        prisma.member.count({ where: { organizationId } }),
-        prisma.invitation.count({
-          where: { organizationId, status: "pending", expiresAt: { gt: new Date() } },
-        }),
-        prisma.auditLog.count({
-          where: { organizationId, createdAt: { gte: thirtyDaysAgo } },
-        }),
-      ]);
+      const [members, pendingInvitations, auditEventsLast30d, monitors, openIncidents] =
+        await Promise.all([
+          prisma.member.count({ where: { organizationId } }),
+          prisma.invitation.count({
+            where: { organizationId, status: "pending", expiresAt: { gt: new Date() } },
+          }),
+          prisma.auditLog.count({
+            where: { organizationId, createdAt: { gte: thirtyDaysAgo } },
+          }),
+          prisma.monitor.count({ where: { organizationId } }),
+          prisma.incident.count({
+            where: { organizationId, status: { not: "RESOLVED" } },
+          }),
+        ]);
 
       return {
         members,
         pendingInvitations,
-        monitors: 0,
-        openIncidents: 0,
+        monitors,
+        openIncidents,
         auditEventsLast30d,
       };
     },

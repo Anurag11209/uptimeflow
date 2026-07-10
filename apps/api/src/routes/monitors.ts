@@ -112,9 +112,13 @@ function actorOf(req: Request): MonitorActor {
   };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function monitorIdOf(req: Request): string {
   const id = req.params.monitorId;
-  if (typeof id !== "string" || id.length === 0) throw AppError.notFound("Monitor not found.");
+  // Non-UUID ids (e.g. a stray "new") would surface as a Prisma error on the
+  // uuid column and turn into a 500 — reject them as not-found up front.
+  if (typeof id !== "string" || !UUID_RE.test(id)) throw AppError.notFound("Monitor not found.");
   return id;
 }
 
