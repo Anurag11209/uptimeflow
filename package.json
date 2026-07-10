@@ -2,7 +2,9 @@
   "name": "backend-uptime",
   "private": true,
   "packageManager": "pnpm@9.15.4",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "build": "turbo run build",
@@ -24,6 +26,9 @@
   "pnpm": {
     "overrides": {
       "ioredis": "5.10.1"
+    },
+    "patchedDependencies": {
+      "better-auth@1.6.18": "patches/better-auth@1.6.18.patch"
     }
   }
 }

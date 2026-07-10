@@ -1,0 +1,66 @@
+diff --git a/dist/api/routes/email-verification.mjs b/dist/api/routes/email-verification.mjs
+index 3cd428c009f17e139d9c22e3705ceca951877e5a..f0859cf12f9d0f52d373103ccdb2bb5e88f7cf67 100644
+--- a/dist/api/routes/email-verification.mjs
++++ b/dist/api/routes/email-verification.mjs
+@@ -31,7 +31,7 @@ async function sendVerificationEmailFn(ctx, user) {
+ 		user,
+ 		url,
+ 		token
+-	}, ctx.request?.clone()));
++	}, (ctx.request && !ctx.request.bodyUsed ? ctx.request.clone() : void 0)));
+ }
+ const sendVerificationEmail = createAuthEndpoint("/send-verification-email", {
+ 	method: "POST",
+@@ -186,7 +186,7 @@ const verifyEmail = createAuthEndpoint("/verify-email", {
+ 					},
+ 					url,
+ 					token: newToken
+-				}, ctx.request?.clone()));
++				}, (ctx.request && !ctx.request.bodyUsed ? ctx.request.clone() : void 0)));
+ 				if (ctx.query.callbackURL) throw ctx.redirect(ctx.query.callbackURL);
+ 				return ctx.json({ status: true });
+ 			}
+@@ -239,7 +239,7 @@ const verifyEmail = createAuthEndpoint("/verify-email", {
+ 					user: updatedUser,
+ 					url: `${ctx.context.baseURL}/verify-email?token=${newToken}&callbackURL=${updateCallbackURL}`,
+ 					token: newToken
+-				}, ctx.request?.clone()));
++				}, (ctx.request && !ctx.request.bodyUsed ? ctx.request.clone() : void 0)));
+ 				await setSessionCookie(ctx, {
+ 					session: activeSession.session,
+ 					user: {
+diff --git a/dist/api/routes/sign-in.mjs b/dist/api/routes/sign-in.mjs
+index d50d2282e58261f574d9c73ec1df08487a332b80..fa9b7d2985291c10964af88620f7abc271a5663d 100644
+--- a/dist/api/routes/sign-in.mjs
++++ b/dist/api/routes/sign-in.mjs
+@@ -237,7 +237,7 @@ const signInEmail = () => createAuthEndpoint("/sign-in/email", {
+ 				user: user.user,
+ 				url,
+ 				token
+-			}, ctx.request?.clone()));
++			}, (ctx.request && !ctx.request.bodyUsed ? ctx.request.clone() : void 0)));
+ 		}
+ 		throw APIError.from("FORBIDDEN", BASE_ERROR_CODES.EMAIL_NOT_VERIFIED);
+ 	}
+diff --git a/dist/api/routes/sign-up.mjs b/dist/api/routes/sign-up.mjs
+index d04da6c0d3492c240321f38334e3374b8bf71fc6..df62c411b250e1c766f29db42cd678640d35e2fd 100644
+--- a/dist/api/routes/sign-up.mjs
++++ b/dist/api/routes/sign-up.mjs
+@@ -171,7 +171,7 @@ const signUpEmail = () => createAuthEndpoint("/sign-up/email", {
+ 				* between existing and non-existing emails.
+ 				*/
+ 				await ctx.context.password.hash(password);
+-				if (ctx.context.options.emailAndPassword?.onExistingUserSignUp) await ctx.context.runInBackgroundOrAwait(ctx.context.options.emailAndPassword.onExistingUserSignUp({ user: dbUser.user }, ctx.request?.clone()));
++				if (ctx.context.options.emailAndPassword?.onExistingUserSignUp) await ctx.context.runInBackgroundOrAwait(ctx.context.options.emailAndPassword.onExistingUserSignUp({ user: dbUser.user }, (ctx.request && !ctx.request.bodyUsed ? ctx.request.clone() : void 0)));
+ 				const now = /* @__PURE__ */ new Date();
+ 				const generatedId = ctx.context.generateId({ model: "user" }) || generateId();
+ 				const coreFields = {
+@@ -246,7 +246,7 @@ const signUpEmail = () => createAuthEndpoint("/sign-up/email", {
+ 				user: createdUser,
+ 				url,
+ 				token
+-			}, ctx.request?.clone()));
++			}, (ctx.request && !ctx.request.bodyUsed ? ctx.request.clone() : void 0)));
+ 		}
+ 		if (shouldSkipAutoSignIn) return ctx.json({
+ 			token: null,
