@@ -139,7 +139,7 @@ export default function BillingPage() {
           </div>
           {canManage ? (
             <div className="flex shrink-0 gap-2">
-              {sum?.subscription.hasStripeCustomer ? (
+              {sum?.subscription.hasBillingCustomer ? (
                 <Button variant="secondary" size="sm" onClick={onPortal} loading={busyAction === "portal"}>
                   <CreditCard className="size-3.5" /> Manage payment method
                 </Button>

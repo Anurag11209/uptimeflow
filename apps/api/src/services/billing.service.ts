@@ -1,6 +1,6 @@
 import { AppError } from "@backend-uptime/shared";
 import type { BillingProvider } from "@backend-uptime/billing";
-import type { PrismaClient, PlanTier } from "@backend-uptime/db";
+import type { PrismaClient, PlanTier, BillingProviderKind } from "@backend-uptime/db";
 import type { AuditLogService } from "./audit-log.service.js";
 import type { PlanLimitsService, PlanSummary } from "./plan-limits.service.js";
 
@@ -25,7 +25,7 @@ export interface PlanView {
   voiceEnabled: boolean;
   ssoEnabled: boolean;
   advancedAnalytics: boolean;
-  /** Self-serve checkout is possible only when a Stripe price is configured. */
+  /** Self-serve checkout is possible only when the active provider has a price/plan configured. */
   purchasable: boolean;
 }
 
@@ -49,7 +49,7 @@ export interface SubscriptionView {
   currentPeriodEnd: Date | null;
   cancelAtPeriodEnd: boolean;
   canceledAt: Date | null;
-  hasStripeCustomer: boolean;
+  hasBillingCustomer: boolean;
 }
 
 export interface BillingService {
@@ -70,17 +70,24 @@ export interface BillingService {
 export interface BillingServiceDeps {
   prisma: PrismaClient;
   plans: PlanLimitsService;
-  /** Absent when Stripe is not configured — mutating actions then 503. */
+  /** Absent when billing is not configured — mutating actions then 503. */
   provider?: BillingProvider;
+  /**
+   * Which processor `provider` actually talks to. Drives which
+   * plan/subscription columns get read and written (stripe* vs razorpay*),
+   * so a switch of BILLING_PROVIDER doesn't require touching this file.
+   */
+  providerKind: BillingProviderKind;
   /** Public web origin for checkout success/cancel and portal return urls. */
   webUrl: string;
   auditLogs?: AuditLogService;
 }
 
 export function createBillingService(deps: BillingServiceDeps): BillingService {
-  const { prisma, plans, provider, auditLogs } = deps;
+  const { prisma, plans, provider, providerKind, auditLogs } = deps;
   const webUrl = deps.webUrl.replace(/\/$/, "");
   const billingUrl = `${webUrl}/dashboard/billing`;
+  const isStripe = providerKind === "STRIPE";
 
   function requireProvider(): BillingProvider {
     if (!provider) {
@@ -95,13 +102,22 @@ export function createBillingService(deps: BillingServiceDeps): BillingService {
     return plan;
   }
 
-  /** Reuse the org's Stripe customer or create one and persist the id. */
+  /** The provider-side price/plan id for the active provider, or null if unset. */
+  function planExternalId(plan: { stripePriceId: string | null; razorpayPlanId: string | null }): string | null {
+    return isStripe ? plan.stripePriceId : plan.razorpayPlanId;
+  }
+
+  /** Reuse the org's provider customer id or create one and persist it. */
   async function ensureCustomer(organizationId: string, actor: BillingActor, orgName: string): Promise<string> {
     const sub = await prisma.subscription.findUnique({
       where: { organizationId },
-      select: { stripeCustomerId: true },
+      select: { stripeCustomerId: true, razorpayCustomerId: true, provider: true },
     });
-    if (sub?.stripeCustomerId) return sub.stripeCustomerId;
+    const existingId = isStripe ? sub?.stripeCustomerId : sub?.razorpayCustomerId;
+    // Only reuse an existing customer id if it belongs to the currently
+    // active provider — a subscription created under Stripe shouldn't have
+    // its stale stripeCustomerId reused once BILLING_PROVIDER=razorpay.
+    if (existingId && (!sub?.provider || sub.provider === providerKind)) return existingId;
     if (!actor.email) {
       throw new AppError("bad_request", "A billing email is required to start checkout.");
     }
@@ -112,8 +128,17 @@ export function createBillingService(deps: BillingServiceDeps): BillingService {
     });
     await prisma.subscription.upsert({
       where: { organizationId },
-      update: { stripeCustomerId: customerId },
-      create: { organizationId, plan: "FREE", status: "INCOMPLETE", stripeCustomerId: customerId },
+      update: {
+        provider: providerKind,
+        ...(isStripe ? { stripeCustomerId: customerId } : { razorpayCustomerId: customerId }),
+      },
+      create: {
+        organizationId,
+        plan: "FREE",
+        status: "INCOMPLETE",
+        provider: providerKind,
+        ...(isStripe ? { stripeCustomerId: customerId } : { razorpayCustomerId: customerId }),
+      },
     });
     return customerId;
   }
@@ -151,7 +176,7 @@ export function createBillingService(deps: BillingServiceDeps): BillingService {
         voiceEnabled: p.voiceEnabled,
         ssoEnabled: p.ssoEnabled,
         advancedAnalytics: p.advancedAnalytics,
-        purchasable: Boolean(p.stripePriceId),
+        purchasable: Boolean(planExternalId(p)),
       }));
     },
 
@@ -165,7 +190,7 @@ export function createBillingService(deps: BillingServiceDeps): BillingService {
         currentPeriodEnd: sub?.currentPeriodEnd ?? null,
         cancelAtPeriodEnd: sub?.cancelAtPeriodEnd ?? false,
         canceledAt: sub?.canceledAt ?? null,
-        hasStripeCustomer: Boolean(sub?.stripeCustomerId),
+        hasBillingCustomer: Boolean(isStripe ? sub?.stripeCustomerId : sub?.razorpayCustomerId),
       };
       return { subscription, plan: planSummary };
     },
@@ -191,71 +216,79 @@ export function createBillingService(deps: BillingServiceDeps): BillingService {
     },
 
     async startCheckout(organizationId, input, actor, orgName) {
-      const stripe = requireProvider();
+      const billing = requireProvider();
       const plan = await planForTier(input.tier);
-      if (!plan.stripePriceId) {
+      const externalId = planExternalId(plan);
+      if (!externalId) {
         throw new AppError("bad_request", `The ${plan.name} plan is not available for self-serve checkout.`);
       }
       const customerId = await ensureCustomer(organizationId, actor, orgName);
-      const session = await stripe.createCheckoutSession({
+      const session = await billing.createCheckoutSession({
         organizationId,
         customerId,
-        priceId: plan.stripePriceId,
+        priceId: externalId,
         quantity: input.quantity,
         successUrl: `${billingUrl}?checkout=success`,
         cancelUrl: `${billingUrl}?checkout=canceled`,
       });
-      if (!session.url) throw new AppError("service_unavailable", "Stripe did not return a checkout url.");
-      await audit("billing.checkout_started", organizationId, actor, { tier: input.tier });
+      if (!session.url) throw new AppError("service_unavailable", "The billing provider did not return a checkout url.");
+      await audit("billing.checkout_started", organizationId, actor, { tier: input.tier, provider: providerKind });
       return { url: session.url };
     },
 
     async openPortal(organizationId, actor) {
-      const stripe = requireProvider();
+      const billing = requireProvider();
       const sub = await prisma.subscription.findUnique({
         where: { organizationId },
-        select: { stripeCustomerId: true },
+        select: { stripeCustomerId: true, razorpayCustomerId: true },
       });
-      if (!sub?.stripeCustomerId) {
+      const customerId = isStripe ? sub?.stripeCustomerId : sub?.razorpayCustomerId;
+      if (!customerId) {
         throw new AppError("conflict", "No billing account yet — start a subscription first.");
       }
-      const session = await stripe.createPortalSession({ customerId: sub.stripeCustomerId, returnUrl: billingUrl });
-      await audit("billing.portal_opened", organizationId, actor);
+      // For Stripe this opens the real hosted Billing Portal; for Razorpay
+      // (which has no equivalent) the provider returns our own in-app
+      // "manage subscription" page url instead — see createRazorpayBillingProvider.
+      const session = await billing.createPortalSession({ customerId, returnUrl: billingUrl });
+      await audit("billing.portal_opened", organizationId, actor, { provider: providerKind });
       return { url: session.url };
     },
 
     async changePlan(organizationId, input, actor) {
-      const stripe = requireProvider();
+      const billing = requireProvider();
       const plan = await planForTier(input.tier);
-      if (!plan.stripePriceId) {
+      const externalId = planExternalId(plan);
+      if (!externalId) {
         throw new AppError("bad_request", `The ${plan.name} plan cannot be switched to via the API.`);
       }
       const sub = await prisma.subscription.findUnique({
         where: { organizationId },
-        select: { stripeSubscriptionId: true },
+        select: { stripeSubscriptionId: true, razorpaySubscriptionId: true },
       });
-      if (!sub?.stripeSubscriptionId) {
+      const subscriptionId = isStripe ? sub?.stripeSubscriptionId : sub?.razorpaySubscriptionId;
+      if (!subscriptionId) {
         throw new AppError("conflict", "No active subscription to change — start checkout instead.");
       }
-      await stripe.changePlan({
-        subscriptionId: sub.stripeSubscriptionId,
-        newPriceId: plan.stripePriceId,
+      await billing.changePlan({
+        subscriptionId,
+        newPriceId: externalId,
         quantity: input.quantity,
       });
-      await audit("billing.plan_changed", organizationId, actor, { tier: input.tier });
+      await audit("billing.plan_changed", organizationId, actor, { tier: input.tier, provider: providerKind });
     },
 
     async cancel(organizationId, input, actor) {
-      const stripe = requireProvider();
+      const billing = requireProvider();
       const sub = await prisma.subscription.findUnique({
         where: { organizationId },
-        select: { stripeSubscriptionId: true },
+        select: { stripeSubscriptionId: true, razorpaySubscriptionId: true },
       });
-      if (!sub?.stripeSubscriptionId) {
+      const subscriptionId = isStripe ? sub?.stripeSubscriptionId : sub?.razorpaySubscriptionId;
+      if (!subscriptionId) {
         throw new AppError("conflict", "No active subscription to cancel.");
       }
-      await stripe.cancelSubscription({ subscriptionId: sub.stripeSubscriptionId, atPeriodEnd: input.atPeriodEnd });
-      await audit("billing.canceled", organizationId, actor, { atPeriodEnd: input.atPeriodEnd });
+      await billing.cancelSubscription({ subscriptionId, atPeriodEnd: input.atPeriodEnd });
+      await audit("billing.canceled", organizationId, actor, { atPeriodEnd: input.atPeriodEnd, provider: providerKind });
     },
   };
 }

@@ -143,9 +143,16 @@ function stripeIds(tier: PlanTier): { stripePriceId: string | null; stripeProduc
   };
 }
 
+/** Optional per-tier Razorpay Plan id from env, e.g. RAZORPAY_PLAN_GROWTH. */
+function razorpayIds(tier: PlanTier): { razorpayPlanId: string | null } {
+  return {
+    razorpayPlanId: process.env[`RAZORPAY_PLAN_${tier}`] ?? null,
+  };
+}
+
 async function seedPlans(): Promise<void> {
   for (const plan of PLANS) {
-    const ids = stripeIds(plan.tier);
+    const ids = { ...stripeIds(plan.tier), ...razorpayIds(plan.tier) };
     await prisma.billingPlan.upsert({
       where: { tier: plan.tier },
       update: { ...plan, ...ids },

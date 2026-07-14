@@ -1013,6 +1013,16 @@ enum InvoiceEventType {
   PAYMENT_FAILED
 }
 
+/// Which payment processor is backing a given org's subscription. Lets both
+/// providers coexist: an org's rows are tagged with the provider that created
+/// them, so switching the platform-wide BILLING_PROVIDER env var doesn't
+/// orphan existing subscriptions, and per-org history stays attributable.
+enum BillingProviderKind {
+  STRIPE
+  RAZORPAY
+}
+
+
 /// Plan catalog — seeded as DATA, not hardcoded logic. One row per PlanTier is
 /// the single source of truth for limits and feature flags consumed by the
 /// feature-gating layer (packages/billing reads these, the API enforces them).
@@ -1028,7 +1038,10 @@ model BillingPlan {
   // Stripe linkage (set once the price exists in the Stripe dashboard).
   stripeProductId String?
   stripePriceId   String? @unique
-  priceCents      Int     @default(0) // monthly price in the smallest currency unit
+  // Razorpay linkage (set once the Plan exists in the Razorpay dashboard —
+  // Razorpay has no product/price split, a Plan bundles both).
+  razorpayPlanId  String? @unique
+  priceCents      Int     @default(0) // monthly price in the smallest currency unit (paise for INR)
   currency        String  @default("usd")
 
   // Hard limits. null = unlimited. These are what the gating layer enforces.
@@ -1069,9 +1082,16 @@ model Subscription {
   planId               String?            @db.Uuid
   plan                 PlanTier           @default(FREE)
   status               SubscriptionStatus @default(TRIALING)
+  // Which processor owns this subscription's mutation calls. Set on the
+  // first ensureCustomer/checkout call; existing rows default to STRIPE via
+  // the migration so pre-existing subscriptions keep working unmodified.
+  provider             BillingProviderKind @default(STRIPE)
   stripeCustomerId     String?            @unique
   stripeSubscriptionId String?            @unique
   stripePriceId        String? // the active Stripe price (mirrors BillingPlan)
+  razorpayCustomerId     String?          @unique
+  razorpaySubscriptionId String?          @unique
+  razorpayPlanId         String? // the active Razorpay plan (mirrors BillingPlan)
   seats                Int                @default(1)
   monitorLimit         Int? // per-subscription override; null = plan default / unlimited
   trialEndsAt          DateTime?
@@ -1109,23 +1129,29 @@ model UsageRecord {
   @@map("usage_records")
 }
 
-/// Append-only ledger of processed Stripe webhook events. The unique
-/// `stripeEventId` is what makes webhook handling idempotent: a replayed event
-/// collides on insert and is skipped — the same DB-enforced dedupe pattern as
-/// IntegrationDelivery.dedupeKey. Payment rows double as the org's billing
-/// history (amount, status, hosted invoice URL) for the dashboard.
+/// Append-only ledger of processed billing webhook events (Stripe or
+/// Razorpay). The unique `providerEventId` is what makes webhook handling
+/// idempotent: a replayed event collides on insert and is skipped — the same
+/// DB-enforced dedupe pattern as IntegrationDelivery.dedupeKey. Stripe events
+/// carry their own `evt_…` id in the payload; Razorpay has no such id in the
+/// body, so we use the `x-razorpay-event-id` header value instead. Payment
+/// rows double as the org's billing history (amount, status, hosted invoice
+/// URL) for the dashboard.
 model InvoiceEvent {
-  id             String           @id @default(uuid(7)) @db.Uuid
-  organizationId String
-  subscriptionId String?          @db.Uuid
-  stripeEventId  String           @unique // evt_… — idempotency key
-  type           InvoiceEventType
+  id              String           @id @default(uuid(7)) @db.Uuid
+  organizationId  String
+  subscriptionId  String?          @db.Uuid
+  providerEventId String           @unique // evt_… (Stripe) or x-razorpay-event-id (Razorpay)
+  type            InvoiceEventType
 
   // Invoice/payment detail (present for PAYMENT_* events).
+  provider         BillingProviderKind @default(STRIPE)
   stripeInvoiceId  String?
+  razorpayInvoiceId  String? // razorpay invoice id (invoice.* / subscription.charged events)
+  razorpayPaymentId  String? // razorpay payment id, useful for support/refund lookups
   amountCents      Int?
   currency         String?
-  status           String? // raw Stripe invoice/subscription status
+  status           String? // raw provider invoice/subscription status
   hostedInvoiceUrl String?
   invoicePdfUrl    String?
   periodStart      DateTime?

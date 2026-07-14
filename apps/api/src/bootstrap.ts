@@ -4,7 +4,13 @@ import { createPrisma } from "@backend-uptime/db";
 import { createAuth } from "@backend-uptime/auth";
 import { createEmailProvider, createEmailQueue, createQueueConnection } from "@backend-uptime/notifications";
 import { createIntegrationDispatcher, createIntegrationQueue } from "@backend-uptime/monitoring";
-import { createStripeBillingProvider, createStripeClient } from "@backend-uptime/billing";
+import {
+  createStripeBillingProvider,
+  createStripeClient,
+  createRazorpayBillingProvider,
+  createRazorpayClient,
+  type BillingProvider,
+} from "@backend-uptime/billing";
 import { parseEmailConfig } from "@backend-uptime/config/email";
 import type { Env } from "./env.js";
 import type { SessionData } from "./context.js";
@@ -41,16 +47,32 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
   // delivers via SES with the existing retry policy).
   const statusNotifier = createStatusNotifier({ prisma, emailQueue, webUrl: env.WEB_URL, logger });
 
-  // Stripe billing is optional: only wire the provider when fully configured
-  // (secret + webhook secret). When absent, the webhook route answers 503 and
-  // billing actions return a clear "not configured" error.
-  const billingProvider =
-    env.billingEnabled && env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET
-      ? createStripeBillingProvider({
-          stripe: createStripeClient(env.STRIPE_SECRET_KEY),
-          webhookSecret: env.STRIPE_WEBHOOK_SECRET,
-        })
-      : undefined;
+  // Billing is optional: only wire a provider when the *active* one
+  // (BILLING_PROVIDER) is fully configured. When absent, the webhook route
+  // answers 503 and billing actions return a clear "not configured" error.
+  // Switching BILLING_PROVIDER (e.g. back to "stripe" if an India invite
+  // comes through) needs no other code change — both providers implement
+  // the same BillingProvider interface.
+  let billingProvider: BillingProvider | undefined;
+  if (env.BILLING_PROVIDER === "stripe" && env.billingEnabled && env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET) {
+    billingProvider = createStripeBillingProvider({
+      stripe: createStripeClient(env.STRIPE_SECRET_KEY),
+      webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+    });
+  } else if (
+    env.BILLING_PROVIDER === "razorpay" &&
+    env.billingEnabled &&
+    env.RAZORPAY_KEY_ID &&
+    env.RAZORPAY_KEY_SECRET &&
+    env.RAZORPAY_WEBHOOK_SECRET
+  ) {
+    billingProvider = createRazorpayBillingProvider({
+      razorpay: await createRazorpayClient(env.RAZORPAY_KEY_ID, env.RAZORPAY_KEY_SECRET),
+      webhookSecret: env.RAZORPAY_WEBHOOK_SECRET,
+      checkoutBaseUrl: `${env.WEB_URL}/dashboard/billing/checkout`,
+      portalUrl: `${env.WEB_URL}/dashboard/billing/manage`,
+    });
+  }
 
   const auth = createAuth({
     prisma,

@@ -37,12 +37,26 @@ const schema = z
     AWS_SECRET_ACCESS_KEY: z.string().optional(),
     EMAIL_MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(3),
 
+    // Which payment processor is active. "stripe" and "razorpay" share the
+    // same BillingProvider interface (packages/billing), so switching this
+    // one var — e.g. if a Stripe India invite comes through later — is the
+    // only code-free step needed; no other file branches on provider.
+    BILLING_PROVIDER: z.enum(["stripe", "razorpay"]).default("razorpay"),
+
     // Stripe billing. Optional so the app boots without billing configured
-    // (local dev, CI, self-hosters who don't charge). When the secret key is
-    // present the webhook secret must be too — see superRefine below.
+    // (local dev, CI, self-hosters who don't charge, or when
+    // BILLING_PROVIDER=razorpay). When the secret key is present the webhook
+    // secret must be too — see superRefine below.
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
     STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
     STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+    // Razorpay billing. Same optionality rules as Stripe above, mirrored for
+    // BILLING_PROVIDER=razorpay. key_id is safe client-side (like Stripe's
+    // publishable key); key_secret and the webhook secret must stay server-only.
+    RAZORPAY_KEY_ID: z.string().min(1).optional(),
+    RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
+    RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
 
     // Custom domains (Phase 11): the edge hostname customers CNAME their
     // status-page domain to. SSL is issued at that edge (Caddy on-demand TLS).
@@ -92,13 +106,29 @@ const schema = z
         message: "Required when STRIPE_SECRET_KEY is set — webhooks can't be verified without it.",
       });
     }
+    if (env.RAZORPAY_KEY_ID && (!env.RAZORPAY_KEY_SECRET || !env.RAZORPAY_WEBHOOK_SECRET)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["RAZORPAY_KEY_SECRET"],
+        message: "RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, and RAZORPAY_WEBHOOK_SECRET must all be set together.",
+      });
+    }
+    // The active provider (BILLING_PROVIDER) must actually be configured —
+    // otherwise the app boots with billing "enabled" pointed at nothing.
+    if (env.BILLING_PROVIDER === "razorpay" && env.RAZORPAY_KEY_ID && !env.RAZORPAY_WEBHOOK_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["RAZORPAY_WEBHOOK_SECRET"],
+        message: "Required when RAZORPAY_KEY_ID is set — webhooks can't be verified without it.",
+      });
+    }
   });
 
 export type Env = z.infer<typeof schema> & {
   corsOrigins: string[];
   isProduction: boolean;
   enableOpenApiReference: boolean;
-  /** True when Stripe billing is fully configured (secret + webhook secret). */
+  /** True when the *active* provider (BILLING_PROVIDER) is fully configured. */
   billingEnabled: boolean;
 };
 
@@ -119,6 +149,9 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
     corsOrigins: [...new Set([env.WEB_URL, ...extraOrigins])],
     isProduction: env.NODE_ENV === "production",
     enableOpenApiReference: env.ENABLE_OPENAPI_REFERENCE ?? env.NODE_ENV !== "production",
-    billingEnabled: Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET),
+    billingEnabled:
+      env.BILLING_PROVIDER === "stripe"
+        ? Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET)
+        : Boolean(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET && env.RAZORPAY_WEBHOOK_SECRET),
   };
 }

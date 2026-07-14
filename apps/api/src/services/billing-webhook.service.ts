@@ -115,7 +115,7 @@ export function createBillingWebhookService(deps: {
     if (fromMeta) return fromMeta;
     if (!customerId) return null;
     const sub = await tx.subscription.findFirst({
-      where: { stripeCustomerId: customerId },
+      where: { provider: "STRIPE", stripeCustomerId: customerId },
       select: { organizationId: true },
     });
     return sub?.organizationId ?? null;
@@ -142,6 +142,7 @@ export function createBillingWebhookService(deps: {
       status,
       cancelAtPeriodEnd,
       canceledAt,
+      provider: "STRIPE" as const,
       ...(customerId ? { stripeCustomerId: customerId } : {}),
       ...(subId ? { stripeSubscriptionId: subId } : {}),
       ...(priceId ? { stripePriceId: priceId } : {}),
@@ -211,13 +212,14 @@ export function createBillingWebhookService(deps: {
             select: { id: true },
           });
 
-          // Idempotency anchor: unique stripeEventId. A replay collides here and
-          // the whole transaction rolls back → "duplicate", effect applied once.
+          // Idempotency anchor: unique providerEventId. A replay collides here
+          // and the whole transaction rolls back → "duplicate", effect applied once.
           await tx.invoiceEvent.create({
             data: {
               organizationId,
               subscriptionId: sub?.id ?? null,
-              stripeEventId: event.id,
+              provider: "STRIPE",
+              providerEventId: event.id,
               type,
               stripeInvoiceId: isInvoice ? str(object.id) : null,
               amountCents: isInvoice ? (num(object.amount_paid) ?? num(object.amount_due)) : null,
@@ -240,6 +242,7 @@ export function createBillingWebhookService(deps: {
               await tx.subscription.upsert({
                 where: { organizationId },
                 update: {
+                  provider: "STRIPE",
                   ...(customerId ? { stripeCustomerId: customerId } : {}),
                   ...(subscriptionId ? { stripeSubscriptionId: subscriptionId } : {}),
                 },
@@ -247,6 +250,7 @@ export function createBillingWebhookService(deps: {
                   organizationId,
                   plan: "FREE",
                   status: "INCOMPLETE",
+                  provider: "STRIPE",
                   ...(customerId ? { stripeCustomerId: customerId } : {}),
                   ...(subscriptionId ? { stripeSubscriptionId: subscriptionId } : {}),
                 },
@@ -284,7 +288,7 @@ export function createBillingWebhookService(deps: {
         });
         return "applied";
       } catch (err) {
-        // Unique violation on stripeEventId = the event was already processed.
+        // Unique violation on providerEventId = the event was already processed.
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
           logger?.info({ stripeEventId: event.id, type: event.type }, "stripe event: duplicate, skipped");
           return "duplicate";

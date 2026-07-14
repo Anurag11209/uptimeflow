@@ -31,6 +31,21 @@ export interface StripeLike {
   };
 }
 
+/**
+ * Provider-neutral shape of a verified webhook event, consumed by the
+ * webhook route/service instead of a Stripe-specific type. Both
+ * `createStripeBillingProvider` and `createRazorpayBillingProvider` return
+ * this shape from `verifyWebhook`, so downstream code never imports the
+ * Stripe SDK's `Stripe.Event` type or branches on provider.
+ */
+export interface ProviderEventLike {
+  /** evt_… for Stripe; the `x-razorpay-event-id` header value for Razorpay. */
+  id: string;
+  /** e.g. "customer.subscription.updated" (Stripe) or "subscription.charged" (Razorpay). */
+  type: string;
+  data: { object: Record<string, unknown> };
+}
+
 export interface EnsureCustomerInput {
   /** Tenant the customer belongs to — stored in Stripe metadata for webhook routing. */
   organizationId: string;
@@ -83,8 +98,14 @@ export interface BillingProvider {
   changePlan(input: ChangePlanInput): Promise<void>;
   /** Cancel a subscription, immediately or at period end. */
   cancelSubscription(input: CancelInput): Promise<void>;
-  /** Verify a webhook signature and return the parsed event (throws on bad sig). */
-  verifyWebhook(payload: string | Buffer, signature: string): Stripe.Event;
+  /**
+   * Verify a webhook signature and return the parsed event (throws on bad
+   * sig). `eventId` is for providers whose idempotency id lives outside the
+   * body — Razorpay sends it as the `x-razorpay-event-id` header rather than
+   * a field in the payload; Stripe ignores this param since `evt_…` is
+   * already embedded in its payload.
+   */
+  verifyWebhook(payload: string | Buffer, signature: string, eventId?: string): ProviderEventLike;
 }
 
 export interface StripeProviderDeps {
@@ -152,8 +173,12 @@ export function createStripeBillingProvider(deps: StripeProviderDeps): BillingPr
       }
     },
 
-    verifyWebhook(payload, signature) {
-      return stripe.webhooks.constructEvent(payload, signature, webhookSecret);
+    verifyWebhook(payload, signature, _eventId) {
+      const event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
+      // Stripe.Event is structurally compatible with ProviderEventLike
+      // (id, type, data.object) — narrow the type at this one boundary so
+      // nothing downstream needs the Stripe SDK types.
+      return event as unknown as ProviderEventLike;
     },
   };
 }

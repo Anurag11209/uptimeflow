@@ -51,7 +51,7 @@ describe("hasActivePaidSubscription", () => {
         currentPeriodEnd: null,
         cancelAtPeriodEnd: false,
         canceledAt: null,
-        hasStripeCustomer: true,
+        hasBillingCustomer: true,
         ...over,
       },
       plan: { limits: {}, usage: {} },
@@ -62,7 +62,7 @@ describe("hasActivePaidSubscription", () => {
   });
   it("is false on FREE, without a customer, or when undefined", () => {
     expect(hasActivePaidSubscription(summary({ plan: "FREE" }))).toBe(false);
-    expect(hasActivePaidSubscription(summary({ hasStripeCustomer: false }))).toBe(false);
+    expect(hasActivePaidSubscription(summary({ hasBillingCustomer: false }))).toBe(false);
     expect(hasActivePaidSubscription(undefined)).toBe(false);
   });
 });

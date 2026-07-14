@@ -26,10 +26,12 @@ import { discordIntegrationRouter } from "./routes/integrations/discord.js";
 import { webhookIntegrationRouter } from "./routes/integrations/webhook.js";
 import { integrationDeliveriesRouter } from "./routes/integrations/deliveries.js";
 import { stripeWebhookRouter } from "./routes/billing/webhooks.js";
+import { razorpayWebhookRouter } from "./routes/billing/razorpay-webhooks.js";
 import { billingRouter } from "./routes/billing/router.js";
 import type { IntegrationDispatcher } from "@backend-uptime/monitoring";
 import type { BillingProvider } from "@backend-uptime/billing";
 import { createBillingWebhookService } from "./services/billing-webhook.service.js";
+import { createRazorpayWebhookService } from "./services/razorpay-billing-webhook.service.js";
 import { createPlanLimitsService, type PlanLimitsService } from "./services/plan-limits.service.js";
 import { createBillingService, type BillingService } from "./services/billing.service.js";
 import { createApiKeyService, type ApiKeyService } from "./services/api-key.service.js";
@@ -46,6 +48,7 @@ import {
 } from "./services/oncall.service.js";
 import { createOrgStatsService, type OrgStatsService } from "./services/org-stats.service.js";
 import type { BillingWebhookService } from "./services/billing-webhook.service.js";
+import type { RazorpayWebhookService } from "./services/razorpay-billing-webhook.service.js";
 import { customDomainsRouter } from "./routes/custom-domains.js";
 import { domainResolutionRouter } from "./routes/domain-resolution.js";
 import {
@@ -88,6 +91,7 @@ export interface ServerServices {
   escalationPolicies: EscalationPolicyService;
   onCallSchedules: OnCallScheduleService;
   billingWebhooks: BillingWebhookService;
+  razorpayWebhooks: RazorpayWebhookService;
   planLimits: PlanLimitsService;
   billing: BillingService;
   customDomains: CustomDomainService;
@@ -142,6 +146,9 @@ export function createServer(deps: ServerDeps): Express {
     billingWebhooks:
       deps.services?.billingWebhooks ??
       createBillingWebhookService({ prisma: deps.prisma, auditLogs, logger: deps.logger }),
+    razorpayWebhooks:
+      deps.services?.razorpayWebhooks ??
+      createRazorpayWebhookService({ prisma: deps.prisma, auditLogs, logger: deps.logger }),
     planLimits: planLimits,
     billing:
       deps.services?.billing ??
@@ -149,6 +156,7 @@ export function createServer(deps: ServerDeps): Express {
         prisma: deps.prisma,
         plans: planLimits,
         provider: deps.billingProvider,
+        providerKind: deps.env.BILLING_PROVIDER === "stripe" ? "STRIPE" : "RAZORPAY",
         webUrl: deps.env.WEB_URL,
         auditLogs,
       }),
@@ -208,6 +216,16 @@ export function createServer(deps: ServerDeps): Express {
     stripeWebhookRouter({
       provider: deps.billingProvider,
       service: services.billingWebhooks,
+      logger: deps.logger,
+    }),
+  );
+
+  // Razorpay webhook needs the raw body too, for HMAC signature verification —
+  // same reasoning as the Stripe router above.
+  app.use(
+    razorpayWebhookRouter({
+      provider: deps.billingProvider,
+      service: services.razorpayWebhooks,
       logger: deps.logger,
     }),
   );

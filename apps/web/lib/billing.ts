@@ -19,7 +19,7 @@ export interface BillingSummary {
     currentPeriodEnd: string | null;
     cancelAtPeriodEnd: boolean;
     canceledAt: string | null;
-    hasStripeCustomer: boolean;
+    hasBillingCustomer: boolean;
   };
   plan: {
     limits: {
@@ -117,7 +117,7 @@ export function switchKind(current: PlanTier, target: PlanTier): SwitchKind {
 export function hasActivePaidSubscription(summary: BillingSummary | undefined): boolean {
   if (!summary) return false;
   const s = summary.subscription;
-  return s.hasStripeCustomer && s.plan !== "FREE" && (s.status === "ACTIVE" || s.status === "TRIALING" || s.status === "PAST_DUE");
+  return s.hasBillingCustomer && s.plan !== "FREE" && (s.status === "ACTIVE" || s.status === "TRIALING" || s.status === "PAST_DUE");
 }
 
 export function statusTone(status: string): "up" | "brand" | "down" | "muted" {
@@ -176,7 +176,9 @@ export function useInvalidateBilling() {
   return (orgId: string) => queryClient.invalidateQueries({ queryKey: ["org", orgId, "billing"] });
 }
 
-/** Start Checkout for a tier and redirect the browser to Stripe's hosted page. */
+/** Start Checkout for a tier; redirects the browser to the active provider's
+ *  checkout — Stripe's hosted page, or our own /billing/checkout page that
+ *  boots Razorpay's Checkout.js overlay. */
 export async function startCheckout(orgId: string, tier: PlanTier): Promise<void> {
   const { url } = await api<{ url: string }>(`${base(orgId)}/checkout`, {
     method: "POST",
@@ -185,7 +187,9 @@ export async function startCheckout(orgId: string, tier: PlanTier): Promise<void
   window.location.assign(url);
 }
 
-/** Open the Stripe billing portal (manage payment method / invoices). */
+/** Open payment-method/invoice management — Stripe's hosted Billing Portal,
+ *  or (for Razorpay, which has no hosted equivalent) our own in-app
+ *  /billing/manage page. */
 export async function openPortal(orgId: string): Promise<void> {
   const { url } = await api<{ url: string }>(`${base(orgId)}/portal`, { method: "POST" });
   window.location.assign(url);

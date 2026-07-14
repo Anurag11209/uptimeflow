@@ -3,13 +3,13 @@ import request from "supertest";
 import { Prisma, type PrismaClient } from "@backend-uptime/db";
 import type { BillingProvider } from "@backend-uptime/billing";
 import {
-  createBillingWebhookService,
-  type StripeEventLike,
-} from "../src/services/billing-webhook.service.js";
-import type { BillingWebhookService } from "../src/services/billing-webhook.service.js";
+  createRazorpayWebhookService,
+  type RazorpayEventLike,
+} from "../src/services/razorpay-billing-webhook.service.js";
+import type { RazorpayWebhookService } from "../src/services/razorpay-billing-webhook.service.js";
 import { buildServer } from "./helpers.js";
 
-const WEBHOOK_PATH = "/v1/billing/webhooks/stripe";
+const WEBHOOK_PATH = "/v1/billing/webhooks/razorpay";
 
 // ── Stateful in-memory Prisma fake (subscriptions + invoice_events) ──────────
 
@@ -18,9 +18,10 @@ interface SubRow {
   organizationId: string;
   plan: string;
   status: string;
-  stripeCustomerId?: string | null;
-  stripeSubscriptionId?: string | null;
-  stripePriceId?: string | null;
+  provider?: string;
+  razorpayCustomerId?: string | null;
+  razorpaySubscriptionId?: string | null;
+  razorpayPlanId?: string | null;
   planId?: string | null;
   seats?: number;
   cancelAtPeriodEnd?: boolean;
@@ -34,15 +35,16 @@ function makeFakePrisma(initialSub?: SubRow) {
   const events = new Set<string>();
   const invoiceRows: Record<string, unknown>[] = [];
   const plans = [
-    { id: "plan_growth", tier: "GROWTH", stripePriceId: "price_growth" },
-    { id: "plan_free", tier: "FREE", stripePriceId: null },
+    { id: "plan_growth", tier: "GROWTH", razorpayPlanId: "plan_growth_rzp" },
+    { id: "plan_free", tier: "FREE", razorpayPlanId: null },
   ];
 
   const tx = {
     subscription: {
-      findFirst: async ({ where }: { where: { stripeCustomerId?: string } }) => {
+      findFirst: async ({ where }: { where: { razorpayCustomerId?: string; razorpaySubscriptionId?: string } }) => {
         for (const s of subs.values()) {
-          if (where.stripeCustomerId && s.stripeCustomerId === where.stripeCustomerId) return s;
+          if (where.razorpaySubscriptionId && s.razorpaySubscriptionId === where.razorpaySubscriptionId) return s;
+          if (where.razorpayCustomerId && s.razorpayCustomerId === where.razorpayCustomerId) return s;
         }
         return null;
       },
@@ -79,8 +81,8 @@ function makeFakePrisma(initialSub?: SubRow) {
       },
     },
     billingPlan: {
-      findFirst: async ({ where }: { where: { stripePriceId?: string } }) =>
-        plans.find((p) => p.stripePriceId === where.stripePriceId) ?? null,
+      findFirst: async ({ where }: { where: { razorpayPlanId?: string } }) =>
+        plans.find((p) => p.razorpayPlanId === where.razorpayPlanId) ?? null,
       findUnique: async ({ where }: { where: { tier?: string } }) =>
         plans.find((p) => p.tier === where.tier) ?? null,
     },
@@ -116,23 +118,25 @@ function baseSub(): SubRow {
     organizationId: "org_1",
     plan: "FREE",
     status: "INCOMPLETE",
-    stripeCustomerId: "cus_1",
+    provider: "RAZORPAY",
+    razorpayCustomerId: "cust_1",
   };
 }
 
-function subscriptionEvent(overrides: Partial<StripeEventLike> = {}): StripeEventLike {
+function subscriptionEvent(overrides: Partial<RazorpayEventLike> = {}): RazorpayEventLike {
   return {
-    id: "evt_sub_1",
-    type: "customer.subscription.updated",
+    id: "evt_sub_1", // this is the x-razorpay-event-id header value, forwarded by the route
+    type: "subscription.activated",
     data: {
       object: {
-        id: "sub_x",
-        customer: "cus_1",
+        id: "sub_rzp_x",
+        customer_id: "cust_1",
+        plan_id: "plan_growth_rzp",
         status: "active",
-        cancel_at_period_end: false,
-        current_period_end: 1893456000,
-        metadata: { organizationId: "org_1" },
-        items: { data: [{ price: { id: "price_growth" }, quantity: 3 }] },
+        cancel_at_cycle_end: 0,
+        current_end: 1893456000,
+        quantity: 3,
+        notes: { organizationId: "org_1" },
       },
     },
     ...overrides,
@@ -141,16 +145,16 @@ function subscriptionEvent(overrides: Partial<StripeEventLike> = {}): StripeEven
 
 // ── Service: idempotency + per-event effects ─────────────────────────────────
 
-describe("billing webhook service", () => {
-  let svc: BillingWebhookService;
+describe("razorpay webhook service", () => {
+  let svc: RazorpayWebhookService;
   let store: ReturnType<typeof makeFakePrisma>;
 
   function build(initial?: SubRow) {
     store = makeFakePrisma(initial);
-    svc = createBillingWebhookService({ prisma: store.prisma });
+    svc = createRazorpayWebhookService({ prisma: store.prisma });
   }
 
-  it("applies a subscription.updated event: plan, status, seats", async () => {
+  it("applies a subscription.activated event: plan, status, seats", async () => {
     build(baseSub());
     const outcome = await svc.handleEvent(subscriptionEvent());
     expect(outcome).toBe("applied");
@@ -159,7 +163,7 @@ describe("billing webhook service", () => {
     expect(sub.planId).toBe("plan_growth");
     expect(sub.status).toBe("ACTIVE");
     expect(sub.seats).toBe(3);
-    expect(sub.stripeSubscriptionId).toBe("sub_x");
+    expect(sub.razorpaySubscriptionId).toBe("sub_rzp_x");
   });
 
   it("is idempotent: a replayed event is recorded and applied exactly once", async () => {
@@ -172,13 +176,35 @@ describe("billing webhook service", () => {
     expect(store.invoiceRows).toHaveLength(1);
   });
 
-  it("payment_failed marks the subscription PAST_DUE and records a ledger row", async () => {
-    build(baseSub());
+  it("subscription.charged marks ACTIVE and records a ledger row", async () => {
+    build({ ...baseSub(), status: "PAST_DUE" });
+    const outcome = await svc.handleEvent({
+      id: "evt_charged_1",
+      type: "subscription.charged",
+      data: {
+        object: {
+          id: "sub_rzp_x",
+          customer_id: "cust_1",
+          plan_id: "plan_growth_rzp",
+          status: "active",
+          current_end: 1893456000,
+          quantity: 1,
+          notes: { organizationId: "org_1" },
+        },
+      },
+    });
+    expect(outcome).toBe("applied");
+    expect(store.subs.get("org_1")!.status).toBe("ACTIVE");
+    expect(store.invoiceRows[0]!.type).toBe("PAYMENT_SUCCEEDED");
+  });
+
+  it("payment.failed marks the subscription PAST_DUE and records a ledger row", async () => {
+    build({ ...baseSub(), razorpaySubscriptionId: "sub_rzp_x" });
     const outcome = await svc.handleEvent({
       id: "evt_pf_1",
-      type: "invoice.payment_failed",
+      type: "payment.failed",
       data: {
-        object: { id: "in_1", customer: "cus_1", amount_due: 9900, currency: "usd", status: "open" },
+        object: { id: "pay_1", subscription_id: "sub_rzp_x", amount: 9900, currency: "INR", status: "failed" },
       },
     });
     expect(outcome).toBe("applied");
@@ -186,50 +212,35 @@ describe("billing webhook service", () => {
     const row = store.invoiceRows[0]!;
     expect(row.type).toBe("PAYMENT_FAILED");
     expect(row.amountCents).toBe(9900);
-    expect(row.stripeInvoiceId).toBe("in_1");
+    expect(row.razorpayPaymentId).toBe("pay_1");
   });
 
-  it("payment_succeeded marks ACTIVE and captures the hosted invoice url", async () => {
-    build({ ...baseSub(), status: "PAST_DUE" });
-    const outcome = await svc.handleEvent({
-      id: "evt_ps_1",
-      type: "invoice.payment_succeeded",
-      data: {
-        object: {
-          id: "in_2",
-          customer: "cus_1",
-          amount_paid: 9900,
-          currency: "usd",
-          status: "paid",
-          hosted_invoice_url: "https://invoice.stripe.com/i/in_2",
-        },
-      },
+  it("subscription.cancelled reverts the org to the FREE plan", async () => {
+    build({
+      ...baseSub(),
+      plan: "GROWTH",
+      planId: "plan_growth",
+      status: "ACTIVE",
+      razorpaySubscriptionId: "sub_rzp_x",
     });
-    expect(outcome).toBe("applied");
-    expect(store.subs.get("org_1")!.status).toBe("ACTIVE");
-    expect(store.invoiceRows[0]!.hostedInvoiceUrl).toBe("https://invoice.stripe.com/i/in_2");
-  });
-
-  it("subscription.deleted reverts the org to the FREE plan", async () => {
-    build({ ...baseSub(), plan: "GROWTH", planId: "plan_growth", status: "ACTIVE", stripeSubscriptionId: "sub_x" });
     const outcome = await svc.handleEvent({
       id: "evt_del_1",
-      type: "customer.subscription.deleted",
-      data: { object: { id: "sub_x", customer: "cus_1", status: "canceled" } },
+      type: "subscription.cancelled",
+      data: { object: { id: "sub_rzp_x", customer_id: "cust_1", status: "cancelled", notes: { organizationId: "org_1" } } },
     });
     expect(outcome).toBe("applied");
     const sub = store.subs.get("org_1")!;
     expect(sub.status).toBe("CANCELED");
     expect(sub.plan).toBe("FREE");
     expect(sub.planId).toBe("plan_free");
-    expect(sub.stripeSubscriptionId).toBeNull();
+    expect(sub.razorpaySubscriptionId).toBeNull();
   });
 
   it("ignores events outside the handled set", async () => {
     build(baseSub());
     const outcome = await svc.handleEvent({
       id: "evt_x",
-      type: "charge.refunded",
+      type: "refund.created",
       data: { object: {} },
     });
     expect(outcome).toBe("ignored");
@@ -237,11 +248,11 @@ describe("billing webhook service", () => {
   });
 
   it("ignores events that cannot be attributed to an org", async () => {
-    build(); // no subscription, so cus_unknown maps to nothing
+    build(); // no subscription, so an unknown subscription id maps to nothing
     const outcome = await svc.handleEvent({
       id: "evt_orphan",
-      type: "invoice.payment_succeeded",
-      data: { object: { id: "in_9", customer: "cus_unknown" } },
+      type: "subscription.charged",
+      data: { object: { id: "sub_unknown", customer_id: "cust_unknown" } },
     });
     expect(outcome).toBe("ignored");
     expect(store.events.size).toBe(0);
@@ -250,17 +261,17 @@ describe("billing webhook service", () => {
 
 // ── Route: signature verification + availability ─────────────────────────────
 
-const okEvent: StripeEventLike = subscriptionEvent();
+const okEvent: RazorpayEventLike = subscriptionEvent();
 
 const fakeProvider = (verify: () => unknown): BillingProvider =>
   ({
     verifyWebhook: verify,
   }) as unknown as BillingProvider;
 
-const fakeService = (outcome: string): BillingWebhookService =>
-  ({ handleEvent: async () => outcome }) as unknown as BillingWebhookService;
+const fakeService = (outcome: string): RazorpayWebhookService =>
+  ({ handleEvent: async () => outcome }) as unknown as RazorpayWebhookService;
 
-describe("billing webhook route", () => {
+describe("razorpay webhook route", () => {
   let prisma: PrismaClient;
   beforeEach(() => {
     prisma = makeFakePrisma(baseSub()).prisma;
@@ -276,32 +287,49 @@ describe("billing webhook route", () => {
     expect(res.body.error.code).toBe("service_unavailable");
   });
 
-  it("rejects a request without the stripe-signature header (400)", async () => {
+  it("rejects a request without the x-razorpay-signature header (400)", async () => {
     const app = buildServer({
       prisma,
       billingProvider: fakeProvider(() => okEvent),
-      services: { billingWebhooks: fakeService("applied") },
+      services: { razorpayWebhooks: fakeService("applied") },
     });
     const res = await request(app)
       .post(WEBHOOK_PATH)
       .set("Content-Type", "application/json")
+      .set("x-razorpay-event-id", "evt_sub_1")
       .send(JSON.stringify(okEvent));
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toMatch(/stripe-signature/i);
+    expect(res.body.error.message).toMatch(/x-razorpay-signature/i);
+  });
+
+  it("rejects a request without the x-razorpay-event-id header (400)", async () => {
+    const app = buildServer({
+      prisma,
+      billingProvider: fakeProvider(() => okEvent),
+      services: { razorpayWebhooks: fakeService("applied") },
+    });
+    const res = await request(app)
+      .post(WEBHOOK_PATH)
+      .set("Content-Type", "application/json")
+      .set("x-razorpay-signature", "goodsig")
+      .send(JSON.stringify(okEvent));
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/x-razorpay-event-id/i);
   });
 
   it("rejects an invalid signature (400) and never processes the event", async () => {
     const app = buildServer({
       prisma,
       billingProvider: fakeProvider(() => {
-        throw new Error("No signatures found matching the expected signature for payload");
+        throw new Error("Razorpay webhook signature verification failed.");
       }),
-      services: { billingWebhooks: fakeService("applied") },
+      services: { razorpayWebhooks: fakeService("applied") },
     });
     const res = await request(app)
       .post(WEBHOOK_PATH)
       .set("Content-Type", "application/json")
-      .set("stripe-signature", "t=1,v1=bad")
+      .set("x-razorpay-signature", "badsig")
+      .set("x-razorpay-event-id", "evt_sub_1")
       .send(JSON.stringify(okEvent));
     expect(res.status).toBe(400);
     expect(res.body.error.message).toMatch(/signature/i);
@@ -311,33 +339,35 @@ describe("billing webhook route", () => {
     const app = buildServer({
       prisma,
       billingProvider: fakeProvider(() => okEvent),
-      services: { billingWebhooks: fakeService("applied") },
+      services: { razorpayWebhooks: fakeService("applied") },
     });
     const res = await request(app)
       .post(WEBHOOK_PATH)
       .set("Content-Type", "application/json")
-      .set("stripe-signature", "t=1,v1=good")
+      .set("x-razorpay-signature", "goodsig")
+      .set("x-razorpay-event-id", "evt_sub_1")
       .send(JSON.stringify(okEvent));
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ received: true, outcome: "applied" });
   });
 
-  it("returns 500 when processing throws so Stripe retries", async () => {
+  it("returns 500 when processing throws so Razorpay retries", async () => {
     const app = buildServer({
       prisma,
       billingProvider: fakeProvider(() => okEvent),
       services: {
-        billingWebhooks: {
+        razorpayWebhooks: {
           handleEvent: async () => {
             throw new Error("boom");
           },
-        } as unknown as BillingWebhookService,
+        } as unknown as RazorpayWebhookService,
       },
     });
     const res = await request(app)
       .post(WEBHOOK_PATH)
       .set("Content-Type", "application/json")
-      .set("stripe-signature", "t=1,v1=good")
+      .set("x-razorpay-signature", "goodsig")
+      .set("x-razorpay-event-id", "evt_sub_1")
       .send(JSON.stringify(okEvent));
     expect(res.status).toBe(500);
   });

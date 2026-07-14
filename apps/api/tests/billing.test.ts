@@ -43,7 +43,7 @@ const fakeBilling: BillingService = {
       currentPeriodEnd: null,
       cancelAtPeriodEnd: false,
       canceledAt: null,
-      hasStripeCustomer: false,
+      hasBillingCustomer: false,
     },
     plan: {} as never,
   }),
@@ -148,6 +148,7 @@ describe("billing service", () => {
       }),
       plans: planLimitsStub,
       provider,
+      providerKind: "STRIPE",
       webUrl: "https://app.test",
     });
     const res = await svc.startCheckout("org_1", { tier: "GROWTH" }, actor(), "Acme");
@@ -165,6 +166,7 @@ describe("billing service", () => {
       }),
       plans: planLimitsStub,
       provider,
+      providerKind: "STRIPE",
       webUrl: "https://app.test",
     });
     await svc.startCheckout("org_1", { tier: "GROWTH" }, actor(), "Acme");
@@ -176,6 +178,7 @@ describe("billing service", () => {
       prisma: svcPrisma({ plansByTier: { STARTER: { name: "Starter", stripePriceId: null } } }),
       plans: planLimitsStub,
       provider: makeProvider(),
+      providerKind: "STRIPE",
       webUrl: "https://app.test",
     });
     await expect(svc.startCheckout("org_1", { tier: "STARTER" }, actor(), "Acme")).rejects.toMatchObject({
@@ -188,6 +191,7 @@ describe("billing service", () => {
       prisma: svcPrisma({ plansByTier: { GROWTH: { name: "Growth", stripePriceId: "price_growth" } } }),
       plans: planLimitsStub,
       provider: undefined,
+      providerKind: "STRIPE",
       webUrl: "https://app.test",
     });
     await expect(svc.startCheckout("org_1", { tier: "GROWTH" }, actor(), "Acme")).rejects.toMatchObject({
@@ -200,6 +204,7 @@ describe("billing service", () => {
       prisma: svcPrisma({ subscription: { stripeCustomerId: null } }),
       plans: planLimitsStub,
       provider: makeProvider(),
+      providerKind: "STRIPE",
       webUrl: "https://app.test",
     });
     await expect(svc.openPortal("org_1", actor())).rejects.toMatchObject({ code: "conflict" });
@@ -213,6 +218,7 @@ describe("billing service", () => {
       }),
       plans: planLimitsStub,
       provider: makeProvider(),
+      providerKind: "STRIPE",
       webUrl: "https://app.test",
     });
     await expect(svc.changePlan("org_1", { tier: "GROWTH" }, actor())).rejects.toMatchObject({ code: "conflict" });
@@ -224,6 +230,7 @@ describe("billing service", () => {
       prisma: svcPrisma({ subscription: { stripeSubscriptionId: "sub_1" } }),
       plans: planLimitsStub,
       provider,
+      providerKind: "STRIPE",
       webUrl: "https://app.test",
     });
     await svc.cancel("org_1", { atPeriodEnd: true }, actor());
@@ -240,6 +247,7 @@ describe("billing service", () => {
       }),
       plans: planLimitsStub,
       provider: makeProvider(),
+      providerKind: "STRIPE",
       webUrl: "https://app.test",
     });
     const plans: PlanView[] = await svc.listPlans();
@@ -257,3 +265,150 @@ function actor() {
     userAgent: null,
   };
 }
+
+// ── Razorpay path (same interface, different provider/columns) ───────────────
+
+function makeRazorpayProvider(): BillingProvider {
+  return {
+    ensureCustomer: vi.fn(async () => "cust_new"),
+    createCheckoutSession: vi.fn(async () => ({
+      id: "sub_1",
+      url: "https://app.test/dashboard/billing/checkout?subscription_id=sub_1",
+    })),
+    createPortalSession: vi.fn(async () => ({ url: "https://app.test/dashboard/billing/manage" })),
+    changePlan: vi.fn(async () => {}),
+    cancelSubscription: vi.fn(async () => {}),
+    verifyWebhook: vi.fn(),
+  } as unknown as BillingProvider;
+}
+
+function svcPrismaRazorpay(opts: {
+  subscription?: Record<string, unknown> | null;
+  plansByTier?: Record<string, unknown>;
+  plansList?: unknown[];
+}): PrismaClient {
+  const plansByTier = opts.plansByTier ?? {};
+  return {
+    subscription: {
+      findUnique: async () => opts.subscription ?? null,
+      upsert: async () => ({}),
+    },
+    billingPlan: {
+      findUnique: async ({ where }: { where: { tier: string } }) => plansByTier[where.tier] ?? null,
+      findMany: async () => opts.plansList ?? [],
+    },
+    invoiceEvent: { findMany: async () => [] },
+  } as unknown as PrismaClient;
+}
+
+describe("billing service (razorpay provider)", () => {
+  it("startCheckout uses the plan's razorpayPlanId, not stripePriceId", async () => {
+    const provider = makeRazorpayProvider();
+    const svc = createBillingService({
+      prisma: svcPrismaRazorpay({
+        subscription: { razorpayCustomerId: "cust_existing", provider: "RAZORPAY" },
+        plansByTier: { GROWTH: { name: "Growth", stripePriceId: null, razorpayPlanId: "plan_growth" } },
+      }),
+      plans: planLimitsStub,
+      provider,
+      providerKind: "RAZORPAY",
+      webUrl: "https://app.test",
+    });
+    const res = await svc.startCheckout("org_1", { tier: "GROWTH" }, actor(), "Acme");
+    expect(res.url).toMatch(/subscription_id=sub_1/);
+    expect(provider.ensureCustomer).not.toHaveBeenCalled(); // reused existing customer
+    expect(provider.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ priceId: "plan_growth" }),
+    );
+  });
+
+  it("startCheckout rejects a plan with no razorpayPlanId even if a stripePriceId exists", async () => {
+    const svc = createBillingService({
+      prisma: svcPrismaRazorpay({
+        plansByTier: { STARTER: { name: "Starter", stripePriceId: "price_starter", razorpayPlanId: null } },
+      }),
+      plans: planLimitsStub,
+      provider: makeRazorpayProvider(),
+      providerKind: "RAZORPAY",
+      webUrl: "https://app.test",
+    });
+    await expect(svc.startCheckout("org_1", { tier: "STARTER" }, actor(), "Acme")).rejects.toMatchObject({
+      code: "bad_request",
+    });
+  });
+
+  it("openPortal returns the in-app manage-subscription url", async () => {
+    const svc = createBillingService({
+      prisma: svcPrismaRazorpay({ subscription: { razorpayCustomerId: "cust_1", provider: "RAZORPAY" } }),
+      plans: planLimitsStub,
+      provider: makeRazorpayProvider(),
+      providerKind: "RAZORPAY",
+      webUrl: "https://app.test",
+    });
+    const res = await svc.openPortal("org_1", actor());
+    expect(res.url).toBe("https://app.test/dashboard/billing/manage");
+  });
+
+  it("cancel reads razorpaySubscriptionId, not stripeSubscriptionId", async () => {
+    const provider = makeRazorpayProvider();
+    const svc = createBillingService({
+      prisma: svcPrismaRazorpay({
+        subscription: { razorpaySubscriptionId: "sub_1", stripeSubscriptionId: "sub_stale", provider: "RAZORPAY" },
+      }),
+      plans: planLimitsStub,
+      provider,
+      providerKind: "RAZORPAY",
+      webUrl: "https://app.test",
+    });
+    await svc.cancel("org_1", { atPeriodEnd: true }, actor());
+    expect(provider.cancelSubscription).toHaveBeenCalledWith({ subscriptionId: "sub_1", atPeriodEnd: true });
+  });
+
+  it("listPlans marks plans with a razorpayPlanId as purchasable, ignoring stripePriceId", async () => {
+    const svc = createBillingService({
+      prisma: svcPrismaRazorpay({
+        plansList: [
+          {
+            tier: "FREE",
+            name: "Free",
+            description: null,
+            priceCents: 0,
+            currency: "inr",
+            monitorLimit: 10,
+            seatLimit: 1,
+            statusPageLimit: 1,
+            smsEnabled: false,
+            voiceEnabled: false,
+            ssoEnabled: false,
+            advancedAnalytics: false,
+            stripePriceId: null,
+            razorpayPlanId: null,
+          },
+          {
+            tier: "GROWTH",
+            name: "Growth",
+            description: null,
+            priceCents: 9900,
+            currency: "inr",
+            monitorLimit: 250,
+            seatLimit: 20,
+            statusPageLimit: 10,
+            smsEnabled: true,
+            voiceEnabled: false,
+            ssoEnabled: false,
+            advancedAnalytics: false,
+            stripePriceId: "price_growth", // stale/unused in razorpay mode
+            razorpayPlanId: "plan_growth",
+          },
+        ],
+      }),
+      plans: planLimitsStub,
+      provider: makeRazorpayProvider(),
+      providerKind: "RAZORPAY",
+      webUrl: "https://app.test",
+    });
+    const plans: PlanView[] = await svc.listPlans();
+    expect(plans.find((p) => p.tier === "FREE")!.purchasable).toBe(false);
+    expect(plans.find((p) => p.tier === "GROWTH")!.purchasable).toBe(true);
+  });
+});
