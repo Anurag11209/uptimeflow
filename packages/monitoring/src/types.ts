@@ -67,6 +67,32 @@ export interface CertInfo {
   subject: string | null;
 }
 
+/** DNS record types the DNS probe can resolve. */
+export type DnsRecordType = "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SOA";
+
+/**
+ * Resolved DNS facts surfaced by the DNS probe. `values` holds every resolved
+ * record rendered as a comparable string (e.g. an MX record becomes
+ * "10 mail.example.com"), so DNS_RECORD assertions can compare against it with
+ * the same comparator set every other assertion source uses.
+ */
+export interface DnsInfo {
+  recordType: DnsRecordType;
+  values: string[];
+}
+
+/**
+ * Registration facts surfaced by the DOMAIN probe (via RDAP). Distinct from
+ * `CertInfo`: a domain's registration expiry is unrelated to any TLS cert
+ * expiry on the same hostname, and the two lapse independently.
+ */
+export interface DomainInfo {
+  expiresAt: Date;
+  daysUntilExpiry: number;
+  registrar: string | null;
+  statuses: string[];
+}
+
 /**
  * Raw, network-level result of a single probe attempt. Probes never decide
  * UP/DOWN — they report what happened; `evaluateOutcome` classifies it.
@@ -78,6 +104,8 @@ export interface ProbeSignal {
   headers?: Record<string, string>;
   body?: string;
   cert?: CertInfo;
+  dns?: DnsInfo;
+  domain?: DomainInfo;
   /** Coarse failure bucket when unreachable: dns | connect | refused | tls | timeout | error. */
   errorType?: string;
   errorMessage?: string;
@@ -101,6 +129,8 @@ export interface ProbeOutcome {
   errorType?: string;
   errorMessage?: string;
   cert?: CertInfo;
+  dns?: DnsInfo;
+  domain?: DomainInfo;
   validations: ValidationResult[];
   attempts: number;
 }

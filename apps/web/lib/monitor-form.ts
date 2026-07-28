@@ -87,7 +87,7 @@ export function typeNeedsUrl(type: MonitorType): boolean {
   return type === "HTTP" || type === "KEYWORD" || type === "SSL";
 }
 export function typeNeedsHost(type: MonitorType): boolean {
-  return type === "TCP" || type === "PORT" || type === "PING";
+  return type === "TCP" || type === "PORT" || type === "PING" || type === "DNS" || type === "DOMAIN";
 }
 export function typeNeedsPort(type: MonitorType): boolean {
   return type === "TCP" || type === "PORT";

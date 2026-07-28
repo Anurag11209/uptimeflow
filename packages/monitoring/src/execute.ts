@@ -48,6 +48,8 @@ export function classifySignal(monitor: MonitorSnapshot, signal: ProbeSignal): O
     statusCode: signal.statusCode,
     responseMs: signal.responseMs,
     cert: signal.cert,
+    dns: signal.dns,
+    domain: signal.domain,
     errorType: hasError ? "assert" : undefined,
     errorMessage: hasError ? validations.find((v) => v.severity === "error")?.message : undefined,
     validations,

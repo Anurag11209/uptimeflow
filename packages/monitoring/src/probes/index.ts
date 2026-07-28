@@ -3,16 +3,20 @@ import { httpProbe } from "./http.js";
 import { sslProbe } from "./ssl.js";
 import { pingProbe, tcpProbe } from "./tcp.js";
 import { heartbeatProbe } from "./heartbeat.js";
+import { dnsProbe } from "./dns.js";
+import { domainProbe } from "./domain.js";
 
 export { httpProbe } from "./http.js";
 export { sslProbe } from "./ssl.js";
 export { tcpProbe, pingProbe } from "./tcp.js";
 export { heartbeatProbe, HEARTBEAT_GRACE_MS } from "./heartbeat.js";
+export { dnsProbe } from "./dns.js";
+export { domainProbe } from "./domain.js";
 
 /**
  * Maps each monitor type to its probe. HTTP/HTTPS/API/KEYWORD all run the HTTP
- * probe (scheme + assertions distinguish them); PORT reuses the TCP probe. DNS
- * and GRPC are declared in the schema but not yet implemented.
+ * probe (scheme + assertions distinguish them); PORT reuses the TCP probe.
+ * GRPC is declared in the schema but not yet implemented.
  */
 export const defaultProbes: ProbeRegistry = {
   HTTP: httpProbe,
@@ -22,4 +26,6 @@ export const defaultProbes: ProbeRegistry = {
   PORT: tcpProbe,
   PING: pingProbe,
   HEARTBEAT: heartbeatProbe,
+  DNS: dnsProbe,
+  DOMAIN: domainProbe,
 };

@@ -4,6 +4,9 @@ import type { AssertionDef, MonitorSnapshot, ProbeSignal, ValidationResult } fro
 /** Default cert-expiry warning window when no explicit assertion is set. */
 export const DEFAULT_SSL_WARN_DAYS = 14;
 
+/** Default registration-expiry warning window when no explicit assertion is set. */
+export const DEFAULT_DOMAIN_WARN_DAYS = 30;
+
 /**
  * Apply one comparator. Returns whether the assertion HOLDS (true = passing).
  * Numeric comparators coerce both sides; the rest operate on strings.
@@ -72,8 +75,15 @@ function resolveActual(def: AssertionDef, signal: ProbeSignal): string | number 
       return def.property ? readJsonPath(signal.body, def.property) : undefined;
     case "SSL_EXPIRY_DAYS":
       return signal.cert?.daysUntilExpiry;
+    case "DOMAIN_EXPIRY_DAYS":
+      return signal.domain?.daysUntilExpiry;
+    case "DNS_RECORD":
+      // Comparators run against every resolved value joined together, so
+      // CONTAINS/EQUALS/MATCHES_REGEX can match any one of several answers
+      // (e.g. multiple A records, or one TXT record among many).
+      return signal.dns?.values.join(", ");
     default:
-      return undefined; // DNS_RECORD and friends are evaluated by their probe
+      return undefined;
   }
 }
 
@@ -136,12 +146,38 @@ export function evaluateValidations(monitor: MonitorSnapshot, signal: ProbeSigna
     }
   }
 
-  // 4. Custom assertions. A failed assertion is an error unless it only warns
-  //    on a soft signal (response time / ssl expiry), which degrades instead.
+  // 4. Domain registration expiry (when RDAP data was captured). Explicit
+  //    DOMAIN_EXPIRY_DAYS assertions are handled in the custom-assertion loop
+  //    below; this is the default safety net: expired → DOWN, near-expiry →
+  //    DEGRADED. Domains renew on much longer cycles than TLS certs, so the
+  //    default warning window is wider than SSL's.
+  if (signal.domain && !monitor.assertions.some((a) => a.source === "DOMAIN_EXPIRY_DAYS")) {
+    const days = signal.domain.daysUntilExpiry;
+    if (days <= 0) {
+      violations.push({
+        ok: false,
+        severity: "error",
+        code: "domain_expired",
+        message: `Domain registration expired ${Math.abs(days)} day(s) ago.`,
+      });
+    } else if (days < DEFAULT_DOMAIN_WARN_DAYS) {
+      violations.push({
+        ok: false,
+        severity: "warn",
+        code: "domain_expiring",
+        message: `Domain registration expires in ${days} day(s).`,
+      });
+    }
+  }
+
+  // 5. Custom assertions. A failed assertion is an error unless it only warns
+  //    on a soft signal (response time / ssl or domain expiry), which
+  //    degrades instead.
   for (const def of monitor.assertions) {
     const actual = resolveActual(def, signal);
     if (applyComparator(actual, def.comparator, def.expected)) continue;
-    const soft = def.source === "RESPONSE_TIME" || def.source === "SSL_EXPIRY_DAYS";
+    const soft =
+      def.source === "RESPONSE_TIME" || def.source === "SSL_EXPIRY_DAYS" || def.source === "DOMAIN_EXPIRY_DAYS";
     violations.push({
       ok: false,
       severity: soft ? "warn" : "error",

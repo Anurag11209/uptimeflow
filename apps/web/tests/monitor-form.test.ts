@@ -23,9 +23,13 @@ describe("field visibility", () => {
     expect(typeNeedsUrl("SSL")).toBe(true);
     expect(typeNeedsUrl("TCP")).toBe(false);
   });
-  it("requires host for tcp/port/ping and port for tcp/port", () => {
+  it("requires host for tcp/port/ping/dns/domain and port for tcp/port", () => {
     expect(typeNeedsHost("PING")).toBe(true);
+    expect(typeNeedsHost("DNS")).toBe(true);
+    expect(typeNeedsHost("DOMAIN")).toBe(true);
     expect(typeNeedsPort("PING")).toBe(false);
+    expect(typeNeedsPort("DNS")).toBe(false);
+    expect(typeNeedsPort("DOMAIN")).toBe(false);
     expect(typeNeedsPort("TCP")).toBe(true);
   });
 });
@@ -81,6 +85,18 @@ describe("validateMonitorForm", () => {
       validateMonitorForm(form({ name: "db", type: "TCP", host: "h", port: "70000" }))
         .port,
     ).toBeDefined();
+  });
+
+  it("requires a host for DNS but no port", () => {
+    const errors = validateMonitorForm(form({ name: "dns", type: "DNS", host: "" }));
+    expect(errors.host).toBeDefined();
+    expect(errors.port).toBeUndefined();
+  });
+
+  it("requires a host for DOMAIN but no port", () => {
+    const errors = validateMonitorForm(form({ name: "domain", type: "DOMAIN", host: "" }));
+    expect(errors.host).toBeDefined();
+    expect(errors.port).toBeUndefined();
   });
 
   it("requires a keyword for keyword monitors", () => {
@@ -146,6 +162,26 @@ describe("buildMonitorPayload", () => {
     );
     expect(payload.host).toBe("db.x");
     expect(payload.port).toBe(5432);
+    expect(payload.url).toBeUndefined();
+    expect(payload.httpMethod).toBeUndefined();
+  });
+
+  it("sends host with no port or url for DNS", () => {
+    const payload = buildMonitorPayload(
+      form({ name: "example.com DNS", type: "DNS", host: "example.com" }),
+    );
+    expect(payload.host).toBe("example.com");
+    expect(payload.port).toBeUndefined();
+    expect(payload.url).toBeUndefined();
+    expect(payload.httpMethod).toBeUndefined();
+  });
+
+  it("sends host with no port or url for DOMAIN", () => {
+    const payload = buildMonitorPayload(
+      form({ name: "example.com expiry", type: "DOMAIN", host: "example.com" }),
+    );
+    expect(payload.host).toBe("example.com");
+    expect(payload.port).toBeUndefined();
     expect(payload.url).toBeUndefined();
     expect(payload.httpMethod).toBeUndefined();
   });

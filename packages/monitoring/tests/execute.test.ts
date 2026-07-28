@@ -30,6 +30,22 @@ describe("classifySignal", () => {
     };
     expect(classifySignal(snap(), certSig).status).toBe("DEGRADED");
   });
+
+  it("carries dns and domain probe data through onto the outcome", () => {
+    const dnsSig: ProbeSignal = {
+      reachable: true,
+      responseMs: 20,
+      dns: { recordType: "A", values: ["1.2.3.4"] },
+    };
+    expect(classifySignal(snap({ type: "DNS" }), dnsSig).dns).toEqual({ recordType: "A", values: ["1.2.3.4"] });
+
+    const domainSig: ProbeSignal = {
+      reachable: true,
+      responseMs: 20,
+      domain: { expiresAt: new Date(2099, 0, 1), daysUntilExpiry: 9999, registrar: "Acme", statuses: [] },
+    };
+    expect(classifySignal(snap({ type: "DOMAIN" }), domainSig).domain?.registrar).toBe("Acme");
+  });
 });
 
 describe("executeCheck retries", () => {
