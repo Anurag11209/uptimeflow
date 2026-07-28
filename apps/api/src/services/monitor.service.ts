@@ -359,12 +359,13 @@ function validateTargetFields(
       if (!fields.port) throw new Error("PORT_REQUIRED");
       break;
     case "PING":
+    case "DNS":
+    case "DOMAIN":
       if (!fields.host) throw new Error("HOST_REQUIRED");
       break;
     case "HEARTBEAT":
       // Inbound ping — no outbound target needed.
       break;
-    case "DNS":
     case "GRPC":
       throw new Error("UNSUPPORTED_TYPE");
   }

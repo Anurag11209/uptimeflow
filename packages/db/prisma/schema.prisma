@@ -254,6 +254,7 @@ enum MonitorType {
   PORT
   HEARTBEAT // inbound cron/dead-man's-switch ping
   GRPC
+  DOMAIN // registration/WHOIS expiry, distinct from SSL cert expiry
 }
 
 enum HttpMethod {
@@ -304,6 +305,7 @@ enum AssertionSource {
   BODY_JSON // JSONPath in `property`
   SSL_EXPIRY_DAYS
   DNS_RECORD
+  DOMAIN_EXPIRY_DAYS
 }
 
 enum AssertionComparator {
@@ -345,7 +347,7 @@ model Monitor {
 
   // Target / probe configuration
   url             String? // HTTP/KEYWORD/SSL
-  host            String? // TCP/PING/DNS/PORT
+  host            String? // TCP/PING/DNS/PORT/DOMAIN
   port            Int?
   httpMethod      HttpMethod? @default(GET)
   requestHeaders  Json?

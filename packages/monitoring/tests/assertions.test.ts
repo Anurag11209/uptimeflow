@@ -75,9 +75,55 @@ describe("evaluateValidations", () => {
     expect(bad.filter((v) => v.severity === "error")).toHaveLength(2);
     expect(bad.filter((v) => v.severity === "warn")).toHaveLength(1);
   });
+
+  it("warns on a near-expiry domain and errors on an expired one", () => {
+    const expiring = evaluateValidations(snap({ type: "DOMAIN" }), sig({ domain: domain(10) }));
+    expect(expiring[0]).toMatchObject({ code: "domain_expiring", severity: "warn" });
+
+    const expired = evaluateValidations(snap({ type: "DOMAIN" }), sig({ domain: domain(-3) }));
+    expect(expired[0]).toMatchObject({ code: "domain_expired", severity: "error" });
+
+    expect(evaluateValidations(snap({ type: "DOMAIN" }), sig({ domain: domain(120) }))).toEqual([]);
+  });
+
+  it("evaluates an explicit DOMAIN_EXPIRY_DAYS assertion instead of the default window", () => {
+    const monitor = snap({
+      type: "DOMAIN",
+      expectedStatus: null,
+      assertions: [{ source: "DOMAIN_EXPIRY_DAYS", comparator: "GREATER_THAN", property: null, expected: "60" }],
+    });
+    const ok = evaluateValidations(monitor, sig({ domain: domain(90) }));
+    expect(ok).toEqual([]);
+
+    // Below the custom 60-day threshold but above the default 30-day window —
+    // the explicit assertion takes over and still flags it, only as a warn.
+    const bad = evaluateValidations(monitor, sig({ domain: domain(45) }));
+    expect(bad).toHaveLength(1);
+    expect(bad[0]).toMatchObject({ code: "assert_domain_expiry_days", severity: "warn" });
+  });
+
+  it("evaluates DNS_RECORD assertions against resolved values", () => {
+    const monitor = snap({
+      type: "DNS",
+      expectedStatus: null,
+      assertions: [
+        { source: "DNS_RECORD", comparator: "CONTAINS", property: "MX", expected: "mail.example.com" },
+      ],
+    });
+    const ok = evaluateValidations(monitor, sig({ dns: { recordType: "MX", values: ["10 mail.example.com"] } }));
+    expect(ok).toEqual([]);
+
+    const bad = evaluateValidations(monitor, sig({ dns: { recordType: "MX", values: ["10 other.example.com"] } }));
+    expect(bad[0]).toMatchObject({ code: "assert_dns_record", severity: "error" });
+  });
 });
 
 function cert(daysUntilExpiry: number) {
   const validTo = new Date(Date.now() + daysUntilExpiry * 86_400_000);
   return { validTo, validFrom: new Date(0), daysUntilExpiry, issuer: "Acme CA", subject: "example.com" };
+}
+
+function domain(daysUntilExpiry: number) {
+  const expiresAt = new Date(Date.now() + daysUntilExpiry * 86_400_000);
+  return { expiresAt, daysUntilExpiry, registrar: "Example Registrar", statuses: [] };
 }

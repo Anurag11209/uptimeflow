@@ -24,6 +24,7 @@ const assertionSchema = z.object({
     "BODY_JSON",
     "SSL_EXPIRY_DAYS",
     "DNS_RECORD",
+    "DOMAIN_EXPIRY_DAYS",
   ]),
   comparator: z.enum([
     "EQUALS",
@@ -50,8 +51,8 @@ const PROBE_REGIONS = [
   "AF_SOUTH",
 ] as const;
 
-/** DNS and GRPC are schema-declared but have no probe implementation yet. */
-const SUPPORTED_TYPES = ["HTTP", "KEYWORD", "SSL", "TCP", "PORT", "PING", "HEARTBEAT"] as const;
+/** GRPC is schema-declared but has no probe implementation yet. */
+const SUPPORTED_TYPES = ["HTTP", "KEYWORD", "SSL", "TCP", "PORT", "PING", "HEARTBEAT", "DNS", "DOMAIN"] as const;
 
 const createMonitorSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -125,7 +126,7 @@ function handleServiceError(error: unknown, res: import("express").Response): bo
     URL_REQUIRED: [422, "A URL is required for this monitor type."],
     HOST_REQUIRED: [422, "A host is required for this monitor type."],
     PORT_REQUIRED: [422, "A port is required for this monitor type."],
-    UNSUPPORTED_TYPE: [422, "DNS and GRPC monitor types are not yet supported."],
+    UNSUPPORTED_TYPE: [422, "The GRPC monitor type is not yet supported."],
     INVALID_GROUP: [422, "Group not found or does not belong to this organization."],
     INVALID_ESCALATION_POLICY: [
       422,

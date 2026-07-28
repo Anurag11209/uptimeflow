@@ -191,11 +191,40 @@ describe("create — target-field validation", () => {
     );
   });
 
-  it("throws UNSUPPORTED_TYPE for DNS", async () => {
+  it("throws HOST_REQUIRED for DNS without host", async () => {
     const svc = makeService({} as any);
-    await expect(svc.create("org_1", { name: "T", type: "DNS" as any }, actor)).rejects.toThrow(
-      "UNSUPPORTED_TYPE",
+    await expect(svc.create("org_1", { name: "T", type: "DNS" }, actor)).rejects.toThrow(
+      "HOST_REQUIRED",
     );
+  });
+
+  it("creates a DNS monitor with a host", async () => {
+    const prisma = makeP();
+    const svc = makeService(prisma);
+    const created = await svc.create(
+      "org_1",
+      { name: "T", type: "DNS", host: "example.com" },
+      actor,
+    );
+    expect(created).toBeDefined();
+  });
+
+  it("throws HOST_REQUIRED for DOMAIN without host", async () => {
+    const svc = makeService({} as any);
+    await expect(svc.create("org_1", { name: "T", type: "DOMAIN" }, actor)).rejects.toThrow(
+      "HOST_REQUIRED",
+    );
+  });
+
+  it("creates a DOMAIN monitor with a host", async () => {
+    const prisma = makeP();
+    const svc = makeService(prisma);
+    const created = await svc.create(
+      "org_1",
+      { name: "T", type: "DOMAIN", host: "example.com" },
+      actor,
+    );
+    expect(created).toBeDefined();
   });
 
   it("throws UNSUPPORTED_TYPE for GRPC", async () => {

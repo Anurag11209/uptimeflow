@@ -16,7 +16,8 @@ export type MonitorType =
   | "SSL"
   | "PORT"
   | "HEARTBEAT"
-  | "GRPC";
+  | "GRPC"
+  | "DOMAIN";
 
 export type MonitorState = "ACTIVE" | "PAUSED" | "DISABLED";
 
@@ -50,7 +51,8 @@ export type AssertionSource =
   | "BODY_TEXT"
   | "BODY_JSON"
   | "SSL_EXPIRY_DAYS"
-  | "DNS_RECORD";
+  | "DNS_RECORD"
+  | "DOMAIN_EXPIRY_DAYS";
 
 export type AssertionComparator =
   | "EQUALS"
@@ -64,7 +66,7 @@ export type AssertionComparator =
 
 export type IncidentStatus = "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
 
-/** Probe types the backend can actually run today (DNS/GRPC are rejected 422). */
+/** Probe types the backend can actually run today (GRPC is rejected 422). */
 export const SUPPORTED_MONITOR_TYPES = [
   "HTTP",
   "KEYWORD",
@@ -72,6 +74,8 @@ export const SUPPORTED_MONITOR_TYPES = [
   "TCP",
   "PORT",
   "PING",
+  "DNS",
+  "DOMAIN",
   "HEARTBEAT",
 ] as const satisfies readonly MonitorType[];
 
@@ -413,6 +417,7 @@ export const MONITOR_TYPE_LABELS: Record<MonitorType, string> = {
   HEARTBEAT: "Heartbeat",
   DNS: "DNS",
   GRPC: "gRPC",
+  DOMAIN: "Domain expiry",
 };
 
 export function monitorTypeLabel(type: MonitorType): string {
