@@ -14,6 +14,7 @@ import {
   ALERT_QUEUE_NAME,
   ESCALATION_QUEUE_NAME,
   PROBE_REGIONS,
+  ROLLUP_QUEUE_NAME,
   checkQueueName,
   createAlertDispatcher,
   createAlertProcessor,
@@ -27,6 +28,9 @@ import {
   createIntegrationProcessor,
   createIntegrationQueue,
   createQueueConnection as createMonitorConnection,
+  createRollupProcessor,
+  createRollupQueue,
+  createRollupScheduler,
   createScheduler,
   loggingTransport,
   webhookTransport,
@@ -35,6 +39,7 @@ import {
   type CheckJobData,
   type EscalationJobData,
   type IntegrationJobData,
+  type RollupJobData,
   type SchedulableQueue,
 } from "@backend-uptime/monitoring";
 import {
@@ -259,6 +264,44 @@ if (env.MONITORING_ENABLED) {
     await escalationWorker.close();
     await escalationWorkerConnection.quit().catch(() => escalationWorkerConnection.disconnect());
   });
+
+  // Daily-stat rollup: folds check_results into monitor_daily_stats, which is
+  // what the analytics and status-page uptime views read. Queue-driven so that
+  // N replicas still produce one tick (BullMQ dedupes schedulers by id) rather
+  // than each running its own timer over the same window.
+  if (env.ROLLUP_ENABLED) {
+    const rollupConnection = createMonitorConnection(env.REDIS_URL);
+    const rollupQueue = createRollupQueue(rollupConnection);
+    // The Worker needs its own blocking-capable connection, separate from the
+    // queue's — same split the alert and escalation workers use.
+    const rollupWorkerConnection = createMonitorConnection(env.REDIS_URL);
+    const rollupWorker = new Worker<RollupJobData>(
+      ROLLUP_QUEUE_NAME,
+      createRollupProcessor({ prisma, logger }),
+      // Serial: overlapping ticks would recompute the same window.
+      { connection: rollupWorkerConnection, concurrency: 1, stalledInterval: 30_000, maxStalledCount: 2 },
+    );
+    rollupWorker.on("ready", () => logger.info({ queue: ROLLUP_QUEUE_NAME }, "rollup worker ready"));
+    rollupWorker.on("failed", (job, err) =>
+      logger.error({ jobId: job?.id, attempts: job?.attemptsMade, err: err.message }, "rollup job failed"),
+    );
+    rollupWorker.on("error", (err) => logger.error({ err }, "rollup worker error"));
+
+    const rollupScheduler = createRollupScheduler({
+      queue: rollupQueue,
+      intervalMs: env.ROLLUP_INTERVAL_MS,
+      lookbackDays: env.ROLLUP_LOOKBACK_DAYS,
+      logger,
+    });
+    void rollupScheduler.ensure().catch((err) => logger.error({ err }, "rollup scheduler registration failed"));
+
+    closers.push(async () => {
+      await rollupWorker.close();
+      await rollupQueue.close();
+      await rollupWorkerConnection.quit().catch(() => rollupWorkerConnection.disconnect());
+      await rollupConnection.quit().catch(() => rollupConnection.disconnect());
+    });
+  }
 
   const processCheck = createCheckProcessor({ prisma, alerts, integrations, escalation, logger });
   for (const region of regions) {

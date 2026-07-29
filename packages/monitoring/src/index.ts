@@ -11,6 +11,7 @@ export * from "./alerting/index.js";
 export * from "./integrations/index.js";
 export * from "./oncall/resolve.js";
 export * from "./escalation/index.js";
+export * from "./rollup/index.js";
 export {
   defaultProbes,
   httpProbe,

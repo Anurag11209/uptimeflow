@@ -38,6 +38,21 @@ const schema = z
     /** How often the scheduler reconciles repeatable checks from the DB (ms). */
     SCHEDULER_SYNC_INTERVAL_MS: z.coerce.number().int().min(5_000).default(30_000),
 
+    // ── Daily-stat rollup ──────────────────────────────────────────────
+    /** Kill switch for the rollup tick, independent of the probe engine. */
+    ROLLUP_ENABLED: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((v) => v === "true"),
+    /** How often the rollup recomputes recent days (ms). */
+    ROLLUP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
+    /**
+     * Days before today recomputed on each tick. Recomputing rather than only
+     * closing yesterday absorbs late checks and worker downtime; the upsert is
+     * idempotent, so the extra work is one query.
+     */
+    ROLLUP_LOOKBACK_DAYS: z.coerce.number().int().min(0).max(30).default(2),
+
     OTEL_SERVICE_NAME: z.string().default("backend-uptime-worker"),
     LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   })
