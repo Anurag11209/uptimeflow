@@ -494,7 +494,7 @@ model MonitorDailyStat {
   totalChecks    Int          @default(0)
   upChecks       Int          @default(0)
   downChecks     Int          @default(0)
-  uptimePct      Decimal      @db.Decimal(6, 4)
+  uptimePct      Decimal      @db.Decimal(7, 4)
   avgResponseMs  Int?
   p95ResponseMs  Int?
   p99ResponseMs  Int?

@@ -8,11 +8,21 @@ import type { IncidentSeverity, PrismaClient, ProbeRegion } from "@backend-uptim
  * primary source (uptime, p95, downtime); the live CheckResult table is only
  * touched for "today" counters that the daily rollup hasn't closed yet.
  *
- * Daily-stat granularity: the worker may store one row per (monitor, region,
- * day) OR a single all-region row (region = null) per (monitor, day). We detect
- * which exists per request and aggregate from that set so totals are never
- * double-counted, mirroring the assumption the status-page history already
- * relies on. Regional breakdowns require the per-region rows.
+ * Daily-stat granularity: the rollup writer emits one row per (monitor, region,
+ * day), but the schema also permits a single all-region row (region = null) per
+ * (monitor, day). We detect which exists per request and aggregate from that
+ * set so totals are never double-counted, mirroring the assumption the
+ * status-page history already relies on. Regional breakdowns require the
+ * per-region rows.
+ *
+ * Aggregates that combine rows are computed in SQL rather than with Prisma's
+ * `_avg`/`_sum` helpers, for two reasons that Prisma cannot express:
+ *   • latency must be *check-weighted* — a region-day with 10 checks cannot
+ *     weigh the same as one with 10,000, which is what averaging daily
+ *     averages does;
+ *   • downtime must be collapsed across regions per (monitor, day) before
+ *     summing — a monitor probed from N regions writes N rows describing the
+ *     same wall-clock outage, so a flat SUM reports N× the real downtime.
  */
 
 // ───────────────────────────── Range ────────────────────────────────────────
@@ -174,132 +184,271 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** `SUM(int)` comes back from Postgres as int8, which Prisma maps to BigInt. */
+function num(value: bigint | number | null | undefined): number {
+  return value == null ? 0 : Number(value);
+}
+
+/** Nullable numeric column: preserve "no data" rather than collapsing it to 0. */
+function intOrNull(value: bigint | number | null | undefined): number | null {
+  return value == null ? null : Number(value);
+}
+
+/** A `date` column arrives as a Date or a `YYYY-MM-DD` string depending on driver. */
+function toDayKey(value: Date | string): string {
+  return typeof value === "string" ? value.slice(0, 10) : dayKey(value);
+}
+
 export function createAnalyticsService(deps: { prisma: PrismaClient }): AnalyticsService {
   const { prisma } = deps;
 
-  /**
-   * Decide which daily-stat granularity to aggregate from for this scope so
-   * org-wide totals are never double-counted. Returns the `region` where-filter
-   * to apply: per-region rows when they exist, else the all-region (null) rows.
-   */
-  async function granularityFilter(
-    where: Prisma.MonitorDailyStatWhereInput,
-  ): Promise<Prisma.EnumProbeRegionNullableFilter | null> {
-    const perRegion = await prisma.monitorDailyStat.count({
-      where: { ...where, region: { not: null } },
-    });
-    // `null` here means "all-region rollup row" (region IS NULL).
-    return perRegion > 0 ? { not: null } : null;
+  /** A resolved read scope: what to aggregate, and from which granularity. */
+  interface StatScope {
+    organizationId: string;
+    since: Date;
+    until: Date;
+    monitorId?: string;
+    /** true → read `region IS NOT NULL` rows; false → the all-region rows. */
+    perRegion: boolean;
   }
 
-  function baseWhere(
+  function rawScope(
+    organizationId: string,
+    range: AnalyticsRange,
+    perRegion: boolean,
+    monitorId?: string,
+  ): StatScope {
+    return { organizationId, since: range.since, until: range.until, monitorId, perRegion };
+  }
+
+  /** WHERE fragment shared by every raw daily-stat aggregate. */
+  function scopeSql(scope: StatScope): Prisma.Sql {
+    return Prisma.sql`
+      "organizationId" = ${scope.organizationId}
+      AND day >= ${dayKey(scope.since)}::date
+      AND day <= ${dayKey(scope.until)}::date
+      ${scope.monitorId ? Prisma.sql`AND "monitorId" = ${scope.monitorId}::uuid` : Prisma.empty}
+      AND region IS ${scope.perRegion ? Prisma.sql`NOT NULL` : Prisma.sql`NULL`}
+    `;
+  }
+
+  /**
+   * Decide which daily-stat granularity to aggregate from for this scope so
+   * org-wide totals are never double-counted. Per-region wins when present: it
+   * is what the rollup writer emits, and the only shape that can support a
+   * regional breakdown.
+   */
+  async function resolveScope(
     organizationId: string,
     range: AnalyticsRange,
     monitorId?: string,
-  ): Prisma.MonitorDailyStatWhereInput {
+  ): Promise<StatScope> {
+    const perRegion = await prisma.monitorDailyStat.count({
+      where: {
+        organizationId,
+        day: { gte: range.since, lte: range.until },
+        ...(monitorId ? { monitorId } : {}),
+        region: { not: null },
+      },
+    });
+    return rawScope(organizationId, range, perRegion > 0, monitorId);
+  }
+
+  interface TotalsRow {
+    total_checks: bigint | number;
+    up_checks: bigint | number;
+    down_checks: bigint | number;
+    avg_response_ms: number | null;
+    downtime_sec: bigint | number;
+  }
+
+  /**
+   * Org-wide (or per-monitor) rolled-up totals across the range, in one query:
+   * check-weighted latency, and downtime collapsed across regions per
+   * (monitor, day) before summing so a multi-region monitor's outage is counted
+   * once rather than once per region.
+   */
+  async function totals(scope: StatScope) {
+    const rows = await prisma.$queryRaw<TotalsRow[]>`
+      WITH scoped AS (
+        SELECT "monitorId", day, "totalChecks", "upChecks", "downChecks",
+               "avgResponseMs", "downtimeSec"
+        FROM monitor_daily_stats
+        WHERE ${scopeSql(scope)}
+      ),
+      per_monitor_day AS (
+        SELECT AVG("downtimeSec") AS downtime FROM scoped GROUP BY "monitorId", day
+      )
+      SELECT
+        COALESCE((SELECT SUM("totalChecks") FROM scoped), 0)::bigint AS total_checks,
+        COALESCE((SELECT SUM("upChecks") FROM scoped), 0)::bigint    AS up_checks,
+        COALESCE((SELECT SUM("downChecks") FROM scoped), 0)::bigint  AS down_checks,
+        (SELECT ROUND(
+                  SUM("avgResponseMs"::numeric * "totalChecks")
+                  / NULLIF(SUM("totalChecks") FILTER (WHERE "avgResponseMs" IS NOT NULL), 0)
+                )::int FROM scoped) AS avg_response_ms,
+        COALESCE((SELECT ROUND(SUM(downtime)) FROM per_monitor_day), 0)::bigint AS downtime_sec
+    `;
+    const row = rows[0];
     return {
-      organizationId,
-      day: { gte: range.since, lte: range.until },
-      ...(monitorId ? { monitorId } : {}),
+      upChecks: num(row?.up_checks),
+      totalChecks: num(row?.total_checks),
+      downChecks: num(row?.down_checks),
+      downtimeSec: num(row?.downtime_sec),
+      avgResponseMs: intOrNull(row?.avg_response_ms),
     };
   }
 
-  /** Org-wide (or per-monitor) rolled-up totals across the range. */
-  async function totals(where: Prisma.MonitorDailyStatWhereInput) {
-    const region = await granularityFilter(where);
-    const scoped: Prisma.MonitorDailyStatWhereInput = { ...where, region };
-    const agg = await prisma.monitorDailyStat.aggregate({
-      where: scoped,
-      _sum: { upChecks: true, totalChecks: true, downChecks: true, downtimeSec: true },
-      _avg: { avgResponseMs: true },
-      _max: { p95ResponseMs: true },
-    });
-    return {
-      scoped,
-      upChecks: agg._sum.upChecks ?? 0,
-      totalChecks: agg._sum.totalChecks ?? 0,
-      downChecks: agg._sum.downChecks ?? 0,
-      downtimeSec: agg._sum.downtimeSec ?? 0,
-      avgResponseMs: agg._avg.avgResponseMs !== null ? Math.round(agg._avg.avgResponseMs) : null,
-      p95ResponseMs: agg._max.p95ResponseMs ?? null,
-    };
+  interface DailyRow {
+    day: Date | string;
+    total_checks: bigint | number;
+    up_checks: bigint | number;
+    down_checks: bigint | number;
+    avg_response_ms: number | null;
   }
 
-  async function dailySeries(
-    scoped: Prisma.MonitorDailyStatWhereInput,
-    range: AnalyticsRange,
-  ): Promise<DailyPoint[]> {
-    const grouped = await prisma.monitorDailyStat.groupBy({
-      by: ["day"],
-      where: scoped,
-      _sum: { upChecks: true, totalChecks: true, downChecks: true },
-      _avg: { avgResponseMs: true },
-    });
-    const byDay = new Map(grouped.map((g) => [dayKey(g.day), g]));
+  async function dailySeries(scope: StatScope, range: AnalyticsRange): Promise<DailyPoint[]> {
+    const rows = await prisma.$queryRaw<DailyRow[]>`
+      SELECT
+        day,
+        SUM("totalChecks")::bigint AS total_checks,
+        SUM("upChecks")::bigint    AS up_checks,
+        SUM("downChecks")::bigint  AS down_checks,
+        ROUND(
+          SUM("avgResponseMs"::numeric * "totalChecks")
+          / NULLIF(SUM("totalChecks") FILTER (WHERE "avgResponseMs" IS NOT NULL), 0)
+        )::int AS avg_response_ms
+      FROM monitor_daily_stats
+      WHERE ${scopeSql(scope)}
+      GROUP BY day
+    `;
+    const byDay = new Map(rows.map((r) => [toDayKey(r.day), r]));
 
     // Emit a continuous series so charts have no gaps for quiet days.
     const points: DailyPoint[] = [];
     for (let i = 0; i < range.days; i++) {
       const key = dayKey(new Date(startOfUtcDay(range.since).getTime() + i * DAY_MS));
-      const g = byDay.get(key);
-      const total = g?._sum.totalChecks ?? 0;
-      const up = g?._sum.upChecks ?? 0;
+      const r = byDay.get(key);
+      const total = num(r?.total_checks);
       points.push({
         day: key,
-        uptimePct: pct(up, total),
-        avgResponseMs:
-          g && g._avg.avgResponseMs !== null ? Math.round(g._avg.avgResponseMs) : null,
+        uptimePct: pct(num(r?.up_checks), total),
+        avgResponseMs: intOrNull(r?.avg_response_ms),
         totalChecks: total,
-        failedChecks: g?._sum.downChecks ?? 0,
+        failedChecks: num(r?.down_checks),
       });
     }
     return points;
   }
 
-  async function regionStats(
-    where: Prisma.MonitorDailyStatWhereInput,
-  ): Promise<RegionStat[]> {
-    const regionWhere: Prisma.MonitorDailyStatWhereInput = { ...where, region: { not: null } };
-    const [grouped, outages] = await Promise.all([
-      prisma.monitorDailyStat.groupBy({
-        by: ["region"],
-        where: regionWhere,
-        _sum: { upChecks: true, totalChecks: true, downChecks: true },
-        _avg: { avgResponseMs: true },
-      }),
-      prisma.monitorDailyStat.groupBy({
-        by: ["region"],
-        where: { ...regionWhere, downChecks: { gt: 0 } },
-        _max: { day: true },
-      }),
-    ]);
-    const lastOutage = new Map(outages.map((o) => [o.region, o._max.day]));
+  interface RegionRow {
+    region: ProbeRegion;
+    total_checks: bigint | number;
+    up_checks: bigint | number;
+    down_checks: bigint | number;
+    avg_response_ms: number | null;
+    last_outage: Date | string | null;
+  }
 
-    return grouped
-      .filter((g): g is typeof g & { region: ProbeRegion } => g.region !== null)
-      .map((g) => {
-        const total = g._sum.totalChecks ?? 0;
-        const up = g._sum.upChecks ?? 0;
-        const lastDay = lastOutage.get(g.region);
+  async function regionStats(scope: StatScope): Promise<RegionStat[]> {
+    // A regional breakdown only exists in per-region rows, whatever granularity
+    // the rest of the request resolved to. `FILTER` folds what used to be a
+    // second grouped query for the last-outage day into this one.
+    const rows = await prisma.$queryRaw<RegionRow[]>`
+      SELECT
+        region,
+        SUM("totalChecks")::bigint AS total_checks,
+        SUM("upChecks")::bigint    AS up_checks,
+        SUM("downChecks")::bigint  AS down_checks,
+        ROUND(
+          SUM("avgResponseMs"::numeric * "totalChecks")
+          / NULLIF(SUM("totalChecks") FILTER (WHERE "avgResponseMs" IS NOT NULL), 0)
+        )::int AS avg_response_ms,
+        MAX(day) FILTER (WHERE "downChecks" > 0) AS last_outage
+      FROM monitor_daily_stats
+      WHERE ${scopeSql({ ...scope, perRegion: true })}
+      GROUP BY region
+    `;
+
+    return rows
+      .map((r) => {
+        const total = num(r.total_checks);
         return {
-          region: g.region,
-          avgResponseMs: g._avg.avgResponseMs !== null ? Math.round(g._avg.avgResponseMs) : null,
-          successRatePct: pct(up, total),
-          failedChecks: g._sum.downChecks ?? 0,
+          region: r.region,
+          avgResponseMs: intOrNull(r.avg_response_ms),
+          successRatePct: pct(num(r.up_checks), total),
+          failedChecks: num(r.down_checks),
           totalChecks: total,
-          lastOutageAt: lastDay ? dayKey(lastDay) : null,
+          lastOutageAt: r.last_outage ? toDayKey(r.last_outage) : null,
         };
       })
       .sort((a, b) => ALL_REGIONS.indexOf(a.region) - ALL_REGIONS.indexOf(b.region));
   }
 
+  interface PerMonitorRow {
+    monitor_id: string;
+    up_checks: bigint | number;
+    total_checks: bigint | number;
+    downtime_sec: bigint | number;
+  }
+
+  /**
+   * Exact p95 latency over the range, from raw checks.
+   *
+   * A range percentile is not recoverable from daily percentiles — the max of
+   * per-day p95s is not a p95 of the range — so this is a deliberate, bounded
+   * exception to reading only the rollup: a single monitor over an indexed
+   * `(monitorId, checkedAt)` range, on a page the web app already caches.
+   * Successful checks only, matching how the rollup stores latency.
+   *
+   * Scoped by monitor alone: the caller has already verified org ownership, and
+   * adding a redundant org predicate would only push the planner off the more
+   * selective index.
+   */
+  async function exactP95(monitorId: string, range: AnalyticsRange): Promise<number | null> {
+    const rows = await prisma.$queryRaw<{ p95: number | null }[]>`
+      SELECT (PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY "responseMs"))::int AS p95
+      FROM check_results
+      WHERE "monitorId" = ${monitorId}::uuid
+        AND "checkedAt" >= ${dayKey(range.since)}::date
+        AND "checkedAt" <  ${dayKey(range.until)}::date + 1
+        AND status IN ('UP','DEGRADED')
+    `;
+    return intOrNull(rows[0]?.p95);
+  }
+
+  /** Per-monitor SLA rows, with downtime collapsed across regions as in `totals`. */
+  async function perMonitorTotals(scope: StatScope): Promise<PerMonitorRow[]> {
+    return prisma.$queryRaw<PerMonitorRow[]>`
+      WITH scoped AS (
+        SELECT "monitorId", day, "totalChecks", "upChecks", "downtimeSec"
+        FROM monitor_daily_stats
+        WHERE ${scopeSql(scope)}
+      ),
+      per_monitor_day AS (
+        SELECT "monitorId", day, AVG("downtimeSec") AS downtime
+        FROM scoped GROUP BY "monitorId", day
+      )
+      SELECT
+        s."monitorId" AS monitor_id,
+        SUM(s."upChecks")::bigint    AS up_checks,
+        SUM(s."totalChecks")::bigint AS total_checks,
+        COALESCE((
+          SELECT ROUND(SUM(d.downtime)) FROM per_monitor_day d
+          WHERE d."monitorId" = s."monitorId"
+        ), 0)::bigint AS downtime_sec
+      FROM scoped s
+      GROUP BY s."monitorId"
+    `;
+  }
+
   return {
     async summary(organizationId, range) {
-      const where = baseWhere(organizationId, range);
+      const scope = await resolveScope(organizationId, range);
       const startToday = startOfUtcDay(range.until);
       const [t, totalMonitors, activeMonitors, activeIncidents, rangeIncidents, failedToday] =
         await Promise.all([
-          totals(where),
+          totals(scope),
           prisma.monitor.count({ where: { organizationId, deletedAt: null } }),
           prisma.monitor.count({ where: { organizationId, deletedAt: null, state: "ACTIVE" } }),
           prisma.incident.count({
@@ -331,7 +480,10 @@ export function createAnalyticsService(deps: { prisma: PrismaClient }): Analytic
       const incidentsInRange = rangeIncidents._count._all;
       const uptimePct = pct(t.upChecks, t.totalChecks);
       // MTBF ≈ total operational time / number of failures over the window.
-      const operationalSec = Math.max(0, range.days * 86_400 - t.downtimeSec);
+      // Operational time is per-monitor time summed over the fleet: the
+      // incident count is org-wide, so dividing it into a single monitor's
+      // worth of wall-clock understates MTBF by roughly the monitor count.
+      const operationalSec = Math.max(0, activeMonitors * range.days * 86_400 - t.downtimeSec);
       const mtbfSec = incidentsInRange > 0 ? Math.round(operationalSec / incidentsInRange) : null;
 
       return {
@@ -352,14 +504,14 @@ export function createAnalyticsService(deps: { prisma: PrismaClient }): Analytic
     },
 
     async timeseries(organizationId, range) {
-      const where = baseWhere(organizationId, range);
-      const region = await granularityFilter(where);
-      const points = await dailySeries({ ...where, region }, range);
+      const scope = await resolveScope(organizationId, range);
+      const points = await dailySeries(scope, range);
       return { rangeDays: range.days, points };
     },
 
     async regions(organizationId, range) {
-      const regions = await regionStats(baseWhere(organizationId, range));
+      // Always per-region, so the granularity probe would be wasted work.
+      const regions = await regionStats(rawScope(organizationId, range, true));
       return { rangeDays: range.days, regions };
     },
 
@@ -432,16 +584,10 @@ export function createAnalyticsService(deps: { prisma: PrismaClient }): Analytic
     },
 
     async sla(organizationId, range) {
-      const where = baseWhere(organizationId, range);
-      const region = await granularityFilter(where);
-      const scoped: Prisma.MonitorDailyStatWhereInput = { ...where, region };
+      const scope = await resolveScope(organizationId, range);
 
       const [perMonitor, incidentsByMonitor, t, resolvedAgg, totalIncidents] = await Promise.all([
-        prisma.monitorDailyStat.groupBy({
-          by: ["monitorId"],
-          where: scoped,
-          _sum: { upChecks: true, totalChecks: true, downtimeSec: true },
-        }),
+        perMonitorTotals(scope),
         prisma.incident.groupBy({
           by: ["monitorId"],
           where: {
@@ -451,7 +597,7 @@ export function createAnalyticsService(deps: { prisma: PrismaClient }): Analytic
           },
           _count: { _all: true },
         }),
-        totals(where),
+        totals(scope),
         prisma.incident.aggregate({
           where: {
             organizationId,
@@ -465,7 +611,7 @@ export function createAnalyticsService(deps: { prisma: PrismaClient }): Analytic
         }),
       ]);
 
-      const ids = perMonitor.map((m) => m.monitorId);
+      const ids = perMonitor.map((m) => m.monitor_id);
       const names = ids.length
         ? await prisma.monitor.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })
         : [];
@@ -478,11 +624,11 @@ export function createAnalyticsService(deps: { prisma: PrismaClient }): Analytic
 
       const monitors: SlaMonitorRow[] = perMonitor
         .map((m) => ({
-          monitorId: m.monitorId,
-          name: nameById.get(m.monitorId) ?? "(deleted monitor)",
-          uptimePct: pct(m._sum.upChecks ?? 0, m._sum.totalChecks ?? 0),
-          downtimeSec: m._sum.downtimeSec ?? 0,
-          incidents: incidentsById.get(m.monitorId) ?? 0,
+          monitorId: m.monitor_id,
+          name: nameById.get(m.monitor_id) ?? "(deleted monitor)",
+          uptimePct: pct(num(m.up_checks), num(m.total_checks)),
+          downtimeSec: num(m.downtime_sec),
+          incidents: incidentsById.get(m.monitor_id) ?? 0,
         }))
         .sort((a, b) => (a.uptimePct ?? 101) - (b.uptimePct ?? 101));
 
@@ -504,18 +650,19 @@ export function createAnalyticsService(deps: { prisma: PrismaClient }): Analytic
       });
       if (!exists) return null;
 
-      const where = baseWhere(organizationId, range, monitorId);
-      const t = await totals(where);
-      const [daily, regions] = await Promise.all([
-        dailySeries(t.scoped, range),
-        regionStats(where),
+      const scope = await resolveScope(organizationId, range, monitorId);
+      const [t, daily, regions, p95ResponseMs] = await Promise.all([
+        totals(scope),
+        dailySeries(scope, range),
+        regionStats(scope),
+        exactP95(monitorId, range),
       ]);
 
       return {
         rangeDays: range.days,
         uptimePct: pct(t.upChecks, t.totalChecks),
         avgResponseMs: t.avgResponseMs,
-        p95ResponseMs: t.p95ResponseMs,
+        p95ResponseMs,
         downtimeSec: t.downtimeSec,
         daily,
         regions,
