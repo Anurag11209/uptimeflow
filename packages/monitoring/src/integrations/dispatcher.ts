@@ -64,15 +64,19 @@ export function createIntegrationDispatcher(deps: IntegrationDispatcherDeps): In
   /** Every enabled, non-deleted integration target for the org. */
   async function targetsFor(organizationId: string): Promise<Target[]> {
     const where = { organizationId, enabled: true, deletedAt: null };
-    const [slack, discord, webhook] = await Promise.all([
+    const [slack, discord, webhook, telegram, msTeams] = await Promise.all([
       deps.prisma.slackIntegration.findMany({ where, select: { id: true } }),
       deps.prisma.discordIntegration.findMany({ where, select: { id: true } }),
       deps.prisma.webhookIntegration.findMany({ where, select: { id: true } }),
+      deps.prisma.telegramIntegration.findMany({ where, select: { id: true } }),
+      deps.prisma.msTeamsIntegration.findMany({ where, select: { id: true } }),
     ]);
     return [
       ...slack.map((s) => ({ type: "SLACK" as const, id: s.id })),
       ...discord.map((d) => ({ type: "DISCORD" as const, id: d.id })),
       ...webhook.map((w) => ({ type: "WEBHOOK" as const, id: w.id })),
+      ...telegram.map((t) => ({ type: "TELEGRAM" as const, id: t.id })),
+      ...msTeams.map((m) => ({ type: "MICROSOFT_TEAMS" as const, id: m.id })),
     ];
   }
 
@@ -153,7 +157,7 @@ export function createIntegrationDispatcher(deps: IntegrationDispatcherDeps): In
         title: opened ? `${ctx.monitorName} is down` : `${ctx.monitorName} has recovered`,
         monitorName: ctx.monitorName,
         status: opened ? "DOWN" : "RESOLVED",
-        url: `${webUrl}/incidents/${ctx.incidentId}`,
+        url: `${webUrl}/dashboard/incidents/${ctx.incidentId}`,
         timestamp: new Date().toISOString(),
       };
       return fanOut(ctx.organizationId, `incident.${ctx.kind}`, `incident:${ctx.incidentId}:${ctx.kind}`, event);

@@ -25,6 +25,8 @@ export * from "./integrations/event.js";
 export * from "./integrations/http.js";
 export * from "./slack/index.js";
 export * from "./discord/index.js";
+export * from "./telegram/index.js";
+export * from "./msteams/index.js";
 export * from "./webhooks/index.js";
 
 // SSRF protection for all user-directed outbound requests.

@@ -2,4 +2,8 @@ export * from "./queue.js";
 export * from "./dispatcher.js";
 export * from "./transports.js";
 export * from "./slack.js";
+export * from "./integration-channel.js";
+export * from "./discord.js";
+export * from "./telegram.js";
+export * from "./msteams.js";
 export * from "./processor.js";

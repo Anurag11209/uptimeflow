@@ -174,26 +174,32 @@ describe("isIntegrationBacked", () => {
 // wrongly listed here scares users off a channel that works; a type wrongly
 // omitted promises delivery that never happens.
 describe("UNDELIVERABLE_TYPES", () => {
-  it.each(["WEBHOOK", "EMAIL", "SLACK"] as const)("excludes %s (has a transport)", (type) => {
-    expect(UNDELIVERABLE_TYPES).not.toContain(type);
-  });
-
-  it.each(["SMS", "VOICE", "DISCORD", "TELEGRAM", "MICROSOFT_TEAMS", "PAGERDUTY", "OPSGENIE"] as const)(
-    "includes %s (no transport)",
+  it.each(["WEBHOOK", "EMAIL", "SLACK", "DISCORD", "TELEGRAM", "MICROSOFT_TEAMS"] as const)(
+    "excludes %s (has a transport)",
     (type) => {
-      expect(UNDELIVERABLE_TYPES).toContain(type);
+      expect(UNDELIVERABLE_TYPES).not.toContain(type);
     },
   );
+
+  it.each(["SMS", "VOICE", "PAGERDUTY", "OPSGENIE"] as const)("includes %s (no transport)", (type) => {
+    expect(UNDELIVERABLE_TYPES).toContain(type);
+  });
 });
 
 // ─── canTestChannel ───────────────────────────────────────────────────────────
 
 describe("canTestChannel", () => {
-  it("allows a test send for SLACK", () => {
-    expect(canTestChannel("SLACK")).toBe(true);
-  });
+  // Test-send resolves an integration record, so it covers exactly the
+  // integration-backed types — not EMAIL/WEBHOOK, which deliver but carry
+  // their target inline rather than by reference.
+  it.each(["SLACK", "DISCORD", "TELEGRAM", "MICROSOFT_TEAMS"] as const)(
+    "allows a test send for %s",
+    (type) => {
+      expect(canTestChannel(type)).toBe(true);
+    },
+  );
 
-  it.each(["EMAIL", "WEBHOOK", "TELEGRAM", "SMS"] as const)(
+  it.each(["EMAIL", "WEBHOOK", "SMS", "VOICE"] as const)(
     "does not offer a test send for %s",
     (type) => {
       expect(canTestChannel(type)).toBe(false);

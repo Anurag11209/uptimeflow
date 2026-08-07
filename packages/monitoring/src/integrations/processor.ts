@@ -2,7 +2,9 @@ import type { Job } from "bullmq";
 import type { IntegrationType, PrismaClient } from "@backend-uptime/db";
 import {
   DiscordNotifier,
+  MsTeamsNotifier,
   SlackNotifier,
+  TelegramNotifier,
   WebhookNotifier,
   type DeliveryResult,
   type FetchLike,
@@ -77,6 +79,30 @@ export function createIntegrationProcessor(deps: IntegrationProcessorDeps) {
         });
         if (!cfg) return { ok: false, status: 0, skipped: true, error: "integration not found or disabled" };
         return WebhookNotifier.send(cfg.endpoint, cfg.secret ?? "", event, {
+          fetchImpl: deps.fetchImpl,
+          timeoutMs: deps.timeoutMs,
+        });
+      }
+      case "TELEGRAM": {
+        const cfg = await prisma.telegramIntegration.findFirst({
+          where: { id: integrationId, organizationId, deletedAt: null },
+          select: { botToken: true, chatId: true },
+        });
+        if (!cfg) return { ok: false, status: 0, skipped: true, error: "integration not found or disabled" };
+        // TelegramNotifier scrubs the bot token from anything it returns; the
+        // error lands in IntegrationDelivery.error, which is stored and shown.
+        return TelegramNotifier.send(cfg.botToken, cfg.chatId, event, {
+          fetchImpl: deps.fetchImpl,
+          timeoutMs: deps.timeoutMs,
+        });
+      }
+      case "MICROSOFT_TEAMS": {
+        const cfg = await prisma.msTeamsIntegration.findFirst({
+          where: { id: integrationId, organizationId, deletedAt: null },
+          select: { webhookUrl: true },
+        });
+        if (!cfg) return { ok: false, status: 0, skipped: true, error: "integration not found or disabled" };
+        return MsTeamsNotifier.send(cfg.webhookUrl, event, {
           fetchImpl: deps.fetchImpl,
           timeoutMs: deps.timeoutMs,
         });
