@@ -1,5 +1,7 @@
 import { AppError, buildPage, type Page } from "@backend-uptime/shared";
 import type { AlertChannelType, Prisma, PrismaClient } from "@backend-uptime/db";
+import { resolveSlackWebhookUrl } from "@backend-uptime/monitoring";
+import { SlackNotifier, type FetchLike } from "@backend-uptime/notifications";
 import { parseCursor } from "./cursor.js";
 import { afterCursorDesc } from "./cursor.js";
 import type { AuditLogService } from "./audit-log.service.js";
@@ -47,6 +49,12 @@ export interface AlertChannelDetail extends AlertChannelItem {
   boundMonitorIds: string[];
 }
 
+export interface TestSendResult {
+  ok: true;
+  /** Stamped on the channel when a test message is actually accepted. */
+  verifiedAt: Date;
+}
+
 // ─── Service interface ────────────────────────────────────────────────────────
 
 export interface AlertChannelService {
@@ -74,6 +82,12 @@ export interface AlertChannelService {
     actor: AlertChannelActor,
   ): Promise<AlertChannelDetail | null>;
   remove(organizationId: string, channelId: string, actor: AlertChannelActor): Promise<boolean>;
+  /** Send a real test notification now. Null when the channel doesn't exist. */
+  test(
+    organizationId: string,
+    channelId: string,
+    actor: AlertChannelActor,
+  ): Promise<TestSendResult | null>;
 }
 
 // ─── Prisma select shapes ─────────────────────────────────────────────────────
@@ -139,14 +153,49 @@ const GATED_TYPES: Partial<Record<AlertChannelType, "sms" | "voice">> = {
   VOICE: "voice",
 };
 
+/** Channel types this build can actually deliver to. Kept in sync with the
+ *  worker's transport map (apps/worker/src/index.ts); anything else records a
+ *  FAILED delivery rather than a phantom success. */
+const TESTABLE_TYPES: AlertChannelType[] = ["SLACK"];
+
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
 export function createAlertChannelService(deps: {
   prisma: PrismaClient;
   auditLogs: AuditLogService;
   planLimits: PlanLimitsService;
+  /** Injected in tests; defaults to the notifier's own hardened HTTP path. */
+  fetchImpl?: FetchLike;
 }): AlertChannelService {
   const { prisma, auditLogs, planLimits } = deps;
+
+  /**
+   * Validate provider-specific config before it is persisted.
+   *
+   * Deliberately narrow: only types with a real transport are checked. Applying
+   * new rules to EMAIL/WEBHOOK/etc. would reject existing rows on an unrelated
+   * edit (a rename would fail on config saved before the rule existed), so
+   * those stay permissive until each gets a transport of its own.
+   *
+   * SLACK reuses `resolveSlackWebhookUrl` — the exact function the transport
+   * calls at send time — so "valid at write time" and "deliverable at send
+   * time" cannot drift apart.
+   */
+  async function assertValidConfig(
+    organizationId: string,
+    type: AlertChannelType,
+    config: Record<string, unknown>,
+  ): Promise<void> {
+    if (type !== "SLACK") return;
+    try {
+      await resolveSlackWebhookUrl(prisma, organizationId, config);
+    } catch (err) {
+      throw new AppError(
+        "validation_failed",
+        err instanceof Error ? err.message : "Invalid Slack channel configuration.",
+      );
+    }
+  }
 
   async function loadDetail(
     organizationId: string,
@@ -185,6 +234,7 @@ export function createAlertChannelService(deps: {
       if (requiredCapability) {
         await planLimits.assertCapability(organizationId, requiredCapability);
       }
+      await assertValidConfig(organizationId, input.type, input.config);
 
       const channel = await prisma.alertChannel.create({
         data: {
@@ -212,7 +262,7 @@ export function createAlertChannelService(deps: {
     async update(organizationId, channelId, input, actor) {
       const existing = await prisma.alertChannel.findFirst({
         where: { id: channelId, organizationId, deletedAt: null },
-        select: { id: true, type: true },
+        select: { id: true, type: true, config: true },
       });
       if (!existing) return null;
 
@@ -222,6 +272,16 @@ export function createAlertChannelService(deps: {
         if (requiredCapability) {
           await planLimits.assertCapability(organizationId, requiredCapability);
         }
+      }
+
+      // Validate against the post-update shape, not just the supplied fields:
+      // switching type onto a config written for the old type must fail too.
+      if (input.type !== undefined || input.config !== undefined) {
+        await assertValidConfig(
+          organizationId,
+          input.type ?? existing.type,
+          input.config ?? (existing.config as Record<string, unknown>),
+        );
       }
 
       const data: Prisma.AlertChannelUpdateInput = { updatedById: actor.userId ?? undefined };
@@ -309,6 +369,73 @@ export function createAlertChannelService(deps: {
         resourceId: channelId,
       });
       return true;
+    },
+
+    /**
+     * Send a real test notification and report the outcome synchronously.
+     *
+     * A deliberate exception to the queue-first rule (ADR-003): the whole point
+     * of a test button is to answer "did that work?" while the operator is
+     * looking at it. Enqueueing would return 202 and leave them guessing, since
+     * NotificationDelivery has no UI to check. The send is bounded by the
+     * notifier's own timeout, and nothing is written until Slack answers.
+     */
+    async test(organizationId, channelId, actor) {
+      const channel = await prisma.alertChannel.findFirst({
+        where: { id: channelId, organizationId, deletedAt: null },
+        select: { id: true, type: true, name: true, config: true },
+      });
+      if (!channel) return null;
+
+      if (!TESTABLE_TYPES.includes(channel.type)) {
+        throw new AppError(
+          "bad_request",
+          `${channel.type} channels cannot deliver yet, so there is nothing to test. ` +
+            `Only ${TESTABLE_TYPES.join(", ")} channels send real notifications in this build.`,
+        );
+      }
+
+      const webhookUrl = await resolveSlackWebhookUrl(prisma, organizationId, channel.config).catch(
+        (err: unknown) => {
+          throw new AppError(
+            "validation_failed",
+            err instanceof Error ? err.message : "Invalid Slack channel configuration.",
+          );
+        },
+      );
+
+      const result = await SlackNotifier.send(
+        webhookUrl,
+        {
+          event: "test",
+          title: `Test alert from ${channel.name}`,
+          summary: "If you can read this, this channel can page you. No incident was created.",
+          timestamp: new Date().toISOString(),
+        },
+        { fetchImpl: deps.fetchImpl },
+      );
+
+      if (!result.ok) {
+        // Surface what Slack actually said — "no_service" (revoked webhook) and
+        // "invalid_payload" need very different fixes from the operator.
+        throw new AppError(
+          "bad_request",
+          `Slack rejected the test message (HTTP ${result.status}): ${result.error ?? "unknown error"}`,
+        );
+      }
+
+      const verifiedAt = new Date();
+      await prisma.alertChannel.update({ where: { id: channelId }, data: { verifiedAt } });
+      await auditLogs.log({
+        organizationId,
+        actorId: actor.userId,
+        actorType: actor.actorType,
+        action: "alert_channel.tested",
+        resourceType: "alertChannel",
+        resourceId: channelId,
+      });
+
+      return { ok: true, verifiedAt };
     },
   };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import request from "supertest";
 import type { PrismaClient } from "@backend-uptime/db";
+import { AppError } from "@backend-uptime/shared";
 import { buildServer, headerGetSession } from "./helpers.js";
 import type {
   AlertChannelService,
@@ -33,7 +34,9 @@ const mockChannel: AlertChannelDetail = {
   boundMonitorIds: ["mon_1"],
 };
 
-function fakeChannels(): AlertChannelService {
+const VERIFIED_AT = new Date("2026-08-08T10:00:00.000Z");
+
+function fakeChannels(overrides: Partial<AlertChannelService> = {}): AlertChannelService {
   return {
     list: async () => ({ items: [mockChannel], nextCursor: null }),
     get: async () => mockChannel,
@@ -42,14 +45,16 @@ function fakeChannels(): AlertChannelService {
     enable: async () => mockChannel,
     disable: async () => ({ ...mockChannel, enabled: false }),
     remove: async () => true,
+    test: async () => ({ ok: true, verifiedAt: VERIFIED_AT }),
+    ...overrides,
   };
 }
 
-function app(role: string | null) {
+function app(role: string | null, channels: AlertChannelService = fakeChannels()) {
   return buildServer({
     prisma: prismaWithRole(role),
     getSession: headerGetSession,
-    services: { channels: fakeChannels() },
+    services: { channels },
   });
 }
 
@@ -76,5 +81,39 @@ describe("alert channel API", () => {
     const res = await request(app("admin")).post(`${BASE}/chan_1/disable`).set("x-test-user", "u1");
     expect(res.status).toBe(200);
     expect(res.body.enabled).toBe(false);
+  });
+});
+
+describe("POST /:channelId/test", () => {
+  it("401s without a session", async () => {
+    expect((await request(app("owner")).post(`${BASE}/chan_1/test`)).status).toBe(401);
+  });
+
+  it("403s for a viewer (needs the update permission)", async () => {
+    const res = await request(app("viewer")).post(`${BASE}/chan_1/test`).set("x-test-user", "u1");
+    expect(res.status).toBe(403);
+  });
+
+  it("returns the send result for an admin", async () => {
+    const res = await request(app("admin")).post(`${BASE}/chan_1/test`).set("x-test-user", "u1");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, verifiedAt: VERIFIED_AT.toISOString() });
+  });
+
+  it("404s for an unknown channel", async () => {
+    const channels = fakeChannels({ test: async () => null });
+    const res = await request(app("admin", channels)).post(`${BASE}/ghost/test`).set("x-test-user", "u1");
+    expect(res.status).toBe(404);
+  });
+
+  it("passes the provider's rejection through to the client", async () => {
+    const channels = fakeChannels({
+      test: async () => {
+        throw new AppError("bad_request", "Slack rejected the test message (HTTP 404): no_service");
+      },
+    });
+    const res = await request(app("admin", channels)).post(`${BASE}/chan_1/test`).set("x-test-user", "u1");
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toContain("no_service");
   });
 });

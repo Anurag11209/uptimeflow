@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { BellRing, Edit, Plus, Power, PowerOff, Trash2 } from "lucide-react";
+import { BellRing, Edit, Plus, Power, PowerOff, Send, Trash2 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,9 @@ import {
   primaryConfigValue,
   buildConfig,
   isIntegrationBacked,
-  STUB_TRANSPORT_TYPES,
+  canTestChannel,
+  useTestAlertChannel,
+  UNDELIVERABLE_TYPES,
   type AlertChannelType,
   type AlertChannelItem,
 } from "@/lib/alert-channels";
@@ -217,12 +219,13 @@ function ChannelModal({ open, editingChannel, orgId, canRead, onClose }: Channel
           )}
         </div>
 
-        {/* Warn when the chosen type is a stub transport */}
-        {STUB_TRANSPORT_TYPES.includes(type) && (
+        {/* Warn when the chosen type has no transport in this build */}
+        {UNDELIVERABLE_TYPES.includes(type) && (
           <Alert tone="warning">
-            <strong>{formatChannelType(type)}</strong> delivery is not yet implemented — alerts will
-            be recorded but no notification will be sent. Only <strong>Webhook</strong> channels
-            deliver real notifications right now.
+            <strong>{formatChannelType(type)}</strong> delivery is not implemented yet. Alerts
+            routed here are recorded as <strong>failed</strong> deliveries — nobody is notified.
+            Use <strong>Slack</strong>, <strong>Email</strong>, or <strong>Webhook</strong> for
+            alerts that need to reach someone.
           </Alert>
         )}
 
@@ -257,6 +260,7 @@ export default function AlertChannelsPage() {
   const enableChannel = useEnableAlertChannel(orgId ?? "");
   const disableChannel = useDisableAlertChannel(orgId ?? "");
   const deleteChannel = useDeleteAlertChannel(orgId ?? "");
+  const testChannel = useTestAlertChannel(orgId ?? "");
 
   const { toast } = useToast();
 
@@ -265,6 +269,7 @@ export default function AlertChannelsPage() {
   const [toDelete, setToDelete] = useState<AlertChannelItem | null>(null);
   // Track which row's toggle is busy so only that row shows a spinner
   const [busyToggleId, setBusyToggleId] = useState<string | null>(null);
+  const [busyTestId, setBusyTestId] = useState<string | null>(null);
 
   const allChannels: AlertChannelItem[] = data?.items ?? [];
 
@@ -296,6 +301,20 @@ export default function AlertChannelsPage() {
       toast(err instanceof ApiError ? err.message : "Could not update status.", "error");
     } finally {
       setBusyToggleId(null);
+    }
+  }
+
+  async function onTest(channel: AlertChannelItem) {
+    setBusyTestId(channel.id);
+    try {
+      await testChannel.mutateAsync(channel.id);
+      toast(`Test message delivered to "${channel.name}".`, "success");
+    } catch (err) {
+      // The API returns the provider's own rejection text — show it verbatim
+      // rather than a generic failure, since the fix depends on which it is.
+      toast(err instanceof ApiError ? err.message : "Test send failed.", "error");
+    } finally {
+      setBusyTestId(null);
     }
   }
 
@@ -376,13 +395,13 @@ export default function AlertChannelsPage() {
               <tbody className="divide-y divide-line-soft">
                 {allChannels.map((channel) => {
                   const meta = channelStatusMeta(channel.enabled);
-                  const isStub = STUB_TRANSPORT_TYPES.includes(channel.type);
+                  const undeliverable = UNDELIVERABLE_TYPES.includes(channel.type);
                   return (
                     <tr key={channel.id} className="group hover:bg-panel-2/50">
                       <td className="px-4 py-3">
                         <span className="font-medium text-text">{channel.name}</span>
-                        {isStub && (
-                          <span className="ml-2 text-xs text-muted">(no delivery yet)</span>
+                        {undeliverable && (
+                          <span className="ml-2 text-xs text-down">(cannot deliver)</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
@@ -394,6 +413,17 @@ export default function AlertChannelsPage() {
                       <td className="px-4 py-3 text-muted">{formatDateTime(channel.updatedAt)}</td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+                          {canUpdate && canTestChannel(channel.type) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Send a test notification now"
+                              loading={busyTestId === channel.id}
+                              onClick={() => onTest(channel)}
+                            >
+                              <Send className="size-3.5" />
+                            </Button>
+                          )}
                           {canUpdate && (
                             <>
                               <Button

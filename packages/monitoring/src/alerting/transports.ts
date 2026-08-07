@@ -15,6 +15,8 @@ export interface AlertPayload {
 
 export interface AlertChannelView {
   id: string;
+  /** Owning tenant — transports that resolve related rows MUST scope by it. */
+  organizationId: string;
   type: AlertChannelType;
   name: string;
   config: unknown;
@@ -25,10 +27,6 @@ export type AlertTransport = (
   channel: AlertChannelView,
   payload: AlertPayload,
 ) => Promise<{ providerMessageId: string | null }>;
-
-export interface TransportLogger {
-  info(payload: Record<string, unknown>, message: string): void;
-}
 
 /** Real outbound webhook: POST the alert payload as JSON. */
 export const webhookTransport: AlertTransport = (channel, payload) => {
@@ -62,19 +60,3 @@ export const webhookTransport: AlertTransport = (channel, payload) => {
     req.end();
   });
 };
-
-/**
- * Fallback transport for channel types without a provider integration yet
- * (EMAIL/SMS/Slack/…). It records the alert as delivered after logging it, so
- * the end-to-end pipeline is exercised; real providers are added per channel in
- * later phases (architecture Phase 5).
- */
-export function loggingTransport(logger?: TransportLogger): AlertTransport {
-  return async (channel, payload) => {
-    logger?.info(
-      { channelType: channel.type, channelName: channel.name, kind: payload.kind, incidentId: payload.incidentId },
-      "alert delivered (logging transport — no provider integration)",
-    );
-    return { providerMessageId: null };
-  };
-}

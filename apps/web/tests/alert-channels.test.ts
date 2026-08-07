@@ -6,7 +6,8 @@ import {
   formatChannelType,
   isIntegrationBacked,
   primaryConfigValue,
-  STUB_TRANSPORT_TYPES,
+  canTestChannel,
+  UNDELIVERABLE_TYPES,
   type AlertChannelItem,
   type AlertChannelType,
 } from "../lib/alert-channels";
@@ -167,18 +168,35 @@ describe("isIntegrationBacked", () => {
   });
 });
 
-// ─── STUB_TRANSPORT_TYPES ─────────────────────────────────────────────────────
+// ─── UNDELIVERABLE_TYPES ──────────────────────────────────────────────────────
 
-describe("STUB_TRANSPORT_TYPES", () => {
-  it("does not include WEBHOOK (the only real transport)", () => {
-    expect(STUB_TRANSPORT_TYPES).not.toContain("WEBHOOK");
+// Must mirror the worker's transport map (apps/worker/src/index.ts). A type
+// wrongly listed here scares users off a channel that works; a type wrongly
+// omitted promises delivery that never happens.
+describe("UNDELIVERABLE_TYPES", () => {
+  it.each(["WEBHOOK", "EMAIL", "SLACK"] as const)("excludes %s (has a transport)", (type) => {
+    expect(UNDELIVERABLE_TYPES).not.toContain(type);
   });
 
-  it("includes EMAIL (stub)", () => {
-    expect(STUB_TRANSPORT_TYPES).toContain("EMAIL");
+  it.each(["SMS", "VOICE", "DISCORD", "TELEGRAM", "MICROSOFT_TEAMS", "PAGERDUTY", "OPSGENIE"] as const)(
+    "includes %s (no transport)",
+    (type) => {
+      expect(UNDELIVERABLE_TYPES).toContain(type);
+    },
+  );
+});
+
+// ─── canTestChannel ───────────────────────────────────────────────────────────
+
+describe("canTestChannel", () => {
+  it("allows a test send for SLACK", () => {
+    expect(canTestChannel("SLACK")).toBe(true);
   });
 
-  it("includes TELEGRAM (stub)", () => {
-    expect(STUB_TRANSPORT_TYPES).toContain("TELEGRAM");
-  });
+  it.each(["EMAIL", "WEBHOOK", "TELEGRAM", "SMS"] as const)(
+    "does not offer a test send for %s",
+    (type) => {
+      expect(canTestChannel(type)).toBe(false);
+    },
+  );
 });

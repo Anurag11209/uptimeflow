@@ -47,7 +47,13 @@ describe("alert processor", () => {
   const baseDelivery = {
     id: "del_1",
     status: "PENDING",
-    channel: { id: "ch_1", type: "WEBHOOK", name: "Ops webhook", config: { url: "https://hooks.test" } },
+    channel: {
+      id: "ch_1",
+      organizationId: "org_1",
+      type: "WEBHOOK",
+      name: "Ops webhook",
+      config: { url: "https://hooks.test" },
+    },
     incident: {
       id: "inc_1",
       title: "API down",
@@ -107,17 +113,72 @@ describe("alert processor", () => {
 
   it("is idempotent for an already-delivered row", async () => {
     const { prisma, updates } = mockPrisma({ ...baseDelivery, status: "DELIVERED" });
-    const processor = createAlertProcessor({ prisma, fallback: async () => ({ providerMessageId: null }) });
+    const transport: AlertTransport = async () => ({ providerMessageId: null });
+    const processor = createAlertProcessor({ prisma, transports: { WEBHOOK: transport } });
     const result = await processor(job());
     expect(result.skipped).toBe("already_delivered");
     expect(updates).toHaveLength(0);
   });
 
-  it("fails closed when no transport matches the channel type", async () => {
-    const { prisma, updates } = mockPrisma(baseDelivery);
-    const processor = createAlertProcessor({ prisma }); // no transports, no fallback
-    const result = await processor(job());
-    expect(result.skipped).toBe("no_transport");
-    expect(updates.at(-1)).toMatchObject({ status: "FAILED" });
+  // Regression guard: a catch-all fallback used to absorb every unsupported
+  // channel type and report success, so the delivery went DELIVERED and the
+  // incident timeline claimed a notification was sent that never left the
+  // process. An unsupported type must fail, visibly and without a timeline lie.
+  describe("unsupported channel type", () => {
+    const telegram = {
+      ...baseDelivery,
+      channel: { id: "ch_9", organizationId: "org_1", type: "TELEGRAM", name: "Team TG", config: {} },
+    };
+
+    it("marks the delivery FAILED with a legible reason", async () => {
+      const { prisma, updates } = mockPrisma(telegram);
+      const processor = createAlertProcessor({ prisma, transports: { WEBHOOK: async () => ({ providerMessageId: null }) } });
+
+      const result = await processor(job());
+
+      expect(result.skipped).toBe("no_transport");
+      expect(updates.at(-1)).toMatchObject({
+        status: "FAILED",
+        lastError: expect.stringContaining("TELEGRAM"),
+      });
+    });
+
+    it("writes NO incident-timeline event", async () => {
+      const { prisma, events } = mockPrisma(telegram);
+      const processor = createAlertProcessor({ prisma });
+
+      await processor(job());
+
+      expect(events).toHaveLength(0);
+    });
+
+    it("never marks the delivery DELIVERED", async () => {
+      const { prisma, updates } = mockPrisma(telegram);
+      const processor = createAlertProcessor({ prisma });
+
+      await processor(job());
+
+      expect(updates.map((u) => u.status)).not.toContain("DELIVERED");
+    });
+
+    it("logs the miss at error level so it is visible in worker logs", async () => {
+      const { prisma } = mockPrisma(telegram);
+      const errors: Array<Record<string, unknown>> = [];
+      const processor = createAlertProcessor({
+        prisma,
+        logger: { info: () => {}, error: (payload) => void errors.push(payload) },
+      });
+
+      await processor(job());
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatchObject({ channelType: "TELEGRAM", deliveryId: "del_1" });
+    });
+
+    it("does not throw, so BullMQ will not retry a delivery that can never succeed", async () => {
+      const { prisma } = mockPrisma(telegram);
+      const processor = createAlertProcessor({ prisma });
+      await expect(processor(job())).resolves.toMatchObject({ skipped: "no_transport" });
+    });
   });
 });

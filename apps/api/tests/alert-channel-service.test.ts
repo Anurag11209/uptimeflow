@@ -48,13 +48,22 @@ function blockCapability(cap: string): PlanLimitsService {
   } as unknown as PlanLimitsService;
 }
 
+/** A valid Slack integration id — uuid-shaped, as the config validator requires. */
+const SLACK_INTEGRATION_ID = "018f5a2c-0000-7000-8000-000000000001";
+const SLACK_CONFIG = { integrationId: SLACK_INTEGRATION_ID };
+const SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/T000/B000/xxxx";
+
 function makeP(
   overrides: {
     findFirst?: unknown;
     updateCount?: number;
+    /** null models an unknown / cross-org / soft-deleted Slack integration. */
+    slackIntegration?: { webhookUrl: string } | null;
   } = {},
 ): PrismaClient {
   const findFirstResult = "findFirst" in overrides ? overrides.findFirst : mockRow;
+  const slackIntegration =
+    "slackIntegration" in overrides ? overrides.slackIntegration : { webhookUrl: SLACK_WEBHOOK_URL };
 
   return {
     alertChannel: {
@@ -71,11 +80,37 @@ function makeP(
         count: overrides.updateCount ?? 1,
       })),
     },
+    slackIntegration: {
+      findFirst: vi.fn(async () => slackIntegration),
+    },
   } as unknown as PrismaClient;
 }
 
-function makeService(prisma = makeP(), limits = passingLimits()) {
-  return createAlertChannelService({ prisma, auditLogs: fakeAuditLogs, planLimits: limits });
+/** Stub fetch so no test ever reaches the network. */
+function makeFetch(response: { status: number; body?: string }) {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const fetchImpl = async (url: string, init: { body: string }) => {
+    calls.push({ url, body: JSON.parse(init.body) as unknown });
+    return {
+      status: response.status,
+      ok: response.status >= 200 && response.status < 300,
+      text: async () => response.body ?? "",
+    };
+  };
+  return { fetchImpl: fetchImpl as any, calls };
+}
+
+function makeService(
+  prisma = makeP(),
+  limits = passingLimits(),
+  fetchImpl?: any,
+) {
+  return createAlertChannelService({
+    prisma,
+    auditLogs: fakeAuditLogs,
+    planLimits: limits,
+    fetchImpl,
+  });
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -135,7 +170,12 @@ describe("create", () => {
     const types = ["WEBHOOK", "SLACK", "DISCORD", "PAGERDUTY", "OPSGENIE"] as const;
     for (const type of types) {
       const svc = makeService(makeP(), limits);
-      await svc.create("org_1", { type, name: type, config: {} }, actor);
+      // SLACK is the one type with config validation, so give it a real config.
+      await svc.create(
+        "org_1",
+        { type, name: type, config: type === "SLACK" ? SLACK_CONFIG : {} },
+        actor,
+      );
     }
     expect(limits.assertCapability).not.toHaveBeenCalled();
   });
@@ -313,5 +353,161 @@ describe("get", () => {
     const result = await svc.get("org_1", "chan_1");
     expect(result).not.toBeNull();
     expect(result!.boundMonitorIds).toEqual(["mon_1", "mon_2"]);
+  });
+});
+
+// ── SLACK config validation ───────────────────────────────────────────────────
+
+describe("SLACK config validation", () => {
+  it("accepts a config referencing a resolvable integration", async () => {
+    const prisma = makeP();
+    const svc = makeService(prisma);
+    await svc.create("org_1", { type: "SLACK", name: "Ops", config: SLACK_CONFIG }, actor);
+    expect(prisma.alertChannel.create).toHaveBeenCalled();
+  });
+
+  it("scopes the integration lookup to the org (no cross-tenant reference)", async () => {
+    const prisma = makeP();
+    const svc = makeService(prisma);
+    await svc.create("org_1", { type: "SLACK", name: "Ops", config: SLACK_CONFIG }, actor);
+    expect(prisma.slackIntegration.findFirst).toHaveBeenCalledWith({
+      where: { id: SLACK_INTEGRATION_ID, organizationId: "org_1", deletedAt: null },
+      select: { webhookUrl: true },
+    });
+  });
+
+  it("rejects a SLACK config with no integrationId", async () => {
+    const prisma = makeP();
+    const svc = makeService(prisma);
+    await expect(
+      svc.create("org_1", { type: "SLACK", name: "Ops", config: {} }, actor),
+    ).rejects.toThrow(/integrationId/i);
+    expect(prisma.alertChannel.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects an integration that does not resolve (unknown, other org, or deleted)", async () => {
+    const prisma = makeP({ slackIntegration: null });
+    const svc = makeService(prisma);
+    await expect(
+      svc.create("org_1", { type: "SLACK", name: "Ops", config: SLACK_CONFIG }, actor),
+    ).rejects.toThrow(/no longer exists/i);
+    expect(prisma.alertChannel.create).not.toHaveBeenCalled();
+  });
+
+  it("leaves other channel types permissive so existing rows keep saving", async () => {
+    const prisma = makeP();
+    const svc = makeService(prisma);
+    await svc.create("org_1", { type: "EMAIL", name: "E", config: {} }, actor);
+    await svc.create("org_1", { type: "WEBHOOK", name: "W", config: {} }, actor);
+    expect(prisma.slackIntegration.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("validates on update when the config changes", async () => {
+    const prisma = makeP({ findFirst: { ...mockRow, type: "SLACK", config: SLACK_CONFIG } });
+    const svc = makeService(prisma);
+    await expect(
+      svc.update("org_1", "chan_1", { config: { integrationId: "nope" } }, actor),
+    ).rejects.toThrow(/not a valid id/i);
+    expect(prisma.alertChannel.update).not.toHaveBeenCalled();
+  });
+
+  it("validates the post-update shape when only the type changes", async () => {
+    // EMAIL config carried onto a SLACK channel must not slip through just
+    // because `config` was not part of this request.
+    const prisma = makeP({ findFirst: { ...mockRow, type: "EMAIL", config: { email: "a@b.com" } } });
+    const svc = makeService(prisma);
+    await expect(svc.update("org_1", "chan_1", { type: "SLACK" }, actor)).rejects.toThrow(
+      /integrationId/i,
+    );
+  });
+
+  it("skips validation when neither type nor config is being changed", async () => {
+    const prisma = makeP({ findFirst: { ...mockRow, type: "SLACK", config: SLACK_CONFIG } });
+    const svc = makeService(prisma);
+    await svc.update("org_1", "chan_1", { name: "Renamed" }, actor);
+    expect(prisma.slackIntegration.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+// ── test send ─────────────────────────────────────────────────────────────────
+
+describe("test", () => {
+  const slackRow = { ...mockRow, type: "SLACK", name: "Ops Slack", config: SLACK_CONFIG };
+
+  it("returns null when the channel does not exist", async () => {
+    const svc = makeService(makeP({ findFirst: null }));
+    expect(await svc.test("org_1", "chan_ghost", actor)).toBeNull();
+  });
+
+  it("posts to the resolved webhook and stamps verifiedAt on success", async () => {
+    const prisma = makeP({ findFirst: slackRow });
+    const { fetchImpl, calls } = makeFetch({ status: 200, body: "ok" });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    const result = await svc.test("org_1", "chan_1", actor);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(result!.verifiedAt).toBeInstanceOf(Date);
+    expect(calls[0]!.url).toBe(SLACK_WEBHOOK_URL);
+    expect(prisma.alertChannel.update).toHaveBeenCalledWith({
+      where: { id: "chan_1" },
+      data: { verifiedAt: result!.verifiedAt },
+    });
+  });
+
+  it("sends a 'test' event, not a fabricated incident", async () => {
+    const prisma = makeP({ findFirst: slackRow });
+    const { fetchImpl, calls } = makeFetch({ status: 200 });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    await svc.test("org_1", "chan_1", actor);
+
+    const body = JSON.stringify(calls[0]!.body);
+    expect(body).toContain("Test alert from Ops Slack");
+    expect(body).toContain("Test notification");
+    expect(body).not.toContain("is down");
+  });
+
+  it("surfaces Slack's own rejection text and does not stamp verifiedAt", async () => {
+    const prisma = makeP({ findFirst: slackRow });
+    const { fetchImpl } = makeFetch({ status: 404, body: "no_service" });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    await expect(svc.test("org_1", "chan_1", actor)).rejects.toThrow(/404.*no_service/);
+    expect(prisma.alertChannel.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects a channel type that cannot deliver, without any network call", async () => {
+    const prisma = makeP({ findFirst: { ...mockRow, type: "TELEGRAM" } });
+    const { fetchImpl, calls } = makeFetch({ status: 200 });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    await expect(svc.test("org_1", "chan_1", actor)).rejects.toThrow(/cannot deliver yet/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("reports a broken config before attempting a send", async () => {
+    const prisma = makeP({ findFirst: slackRow, slackIntegration: null });
+    const { fetchImpl, calls } = makeFetch({ status: 200 });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    await expect(svc.test("org_1", "chan_1", actor)).rejects.toThrow(/no longer exists/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("writes an alert_channel.tested audit log entry", async () => {
+    const prisma = makeP({ findFirst: slackRow });
+    const { fetchImpl } = makeFetch({ status: 200 });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    await svc.test("org_1", "chan_1", actor);
+
+    expect(fakeAuditLogs.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: "org_1",
+        action: "alert_channel.tested",
+        resourceType: "alertChannel",
+      }),
+    );
   });
 });
