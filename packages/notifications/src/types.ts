@@ -59,7 +59,12 @@ export interface RenderedEmail {
 }
 
 export interface OutboundEmail extends RenderedEmail {
-  to: string;
+  /**
+   * One or more recipients. An array is needed because an EMAIL alert channel
+   * can fan out to several addresses; every sender forwards this straight to a
+   * provider API that already accepts both shapes (nodemailer, Resend, SES).
+   */
+  to: string | string[];
   /** Template name for provider logging/metrics labels. */
   template?: string;
 }

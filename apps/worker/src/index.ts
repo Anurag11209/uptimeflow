@@ -53,12 +53,11 @@ import {
   createQueueConnection,
   emailSenderFromProvider,
   loggingEmailMetrics,
-  renderEmail,
   type EmailJob,
   type EmailProvider,
 } from "@backend-uptime/notifications";
-import type { AlertTransport } from "@backend-uptime/monitoring";
 import type { EmailConfig } from "@backend-uptime/config/email";
+import { emailAlertTransport } from "./email-transport.js";
 import { parseEnv } from "./env.js";
 
 const env = parseEnv(process.env);
@@ -82,8 +81,9 @@ const emailConfig: EmailConfig = {
 };
 const emailMetrics = loggingEmailMetrics(logger);
 
-// Build the email provider once; the email queue worker and the EMAIL alert
-// transport share it. SES when EMAIL_PROVIDER=ses, else the logging provider.
+// SES provider used to build the sender when EMAIL_PROVIDER=ses. Note this
+// falls back to the logging provider otherwise, which is why nothing that must
+// actually deliver may use it directly — see email-transport.ts.
 const emailProvider: EmailProvider = createEmailProvider({
   config: emailConfig,
   kind: env.EMAIL_PROVIDER === "ses" ? "ses" : "logging",
@@ -101,43 +101,6 @@ const sender =
         resendApiKey: env.RESEND_API_KEY,
         smtpUrl: env.SMTP_URL,
       });
-
-/** EMAIL alert-channel transport: render an incident email and send it via SES. */
-function emailAlertTransport(provider: EmailProvider, webUrl: string): AlertTransport {
-  return async (channel, payload) => {
-    // The logging provider returns a synthetic message id and reports healthy,
-    // which the alert processor would record as a real DELIVERED send — the
-    // same phantom-success the transport fallback used to produce, one layer
-    // down. Refuse it in production so a deployed worker can never claim an
-    // email was sent when EMAIL_PROVIDER is not a real provider. Local and CI
-    // keep the logging provider so the pipeline stays runnable without SES.
-    if (provider.name === "logging" && env.NODE_ENV === "production") {
-      throw new Error(
-        `EMAIL transport has no real provider (EMAIL_PROVIDER=${env.EMAIL_PROVIDER}) — nothing was sent.`,
-      );
-    }
-    const cfg = (channel.config ?? {}) as { email?: string; recipients?: string[] };
-    const recipients = cfg.recipients ?? (cfg.email ? [cfg.email] : []);
-    if (recipients.length === 0) throw new Error("EMAIL channel is missing email/recipients.");
-    const rendered = renderEmail({
-      template: "incident",
-      to: recipients.join(","),
-      incidentTitle: payload.title,
-      severity: payload.severity ?? "unknown",
-      description: payload.summary ?? `Monitor ${payload.monitorName} is ${payload.kind}.`,
-      // Must match the Next.js route (apps/web/app/dashboard/incidents/[id]).
-      statusPageUrl: `${webUrl}/dashboard/incidents/${payload.incidentId}`,
-    });
-    const result = await provider.sendEmail({
-      to: recipients,
-      subject: rendered.subject,
-      html: rendered.html,
-      text: rendered.text,
-      template: "incident",
-    });
-    return { providerMessageId: result.messageId };
-  };
-}
 
 const emailConnection = createQueueConnection(env.REDIS_URL);
 const emailWorker = new Worker<EmailJob>(QUEUE_NAMES.email, createEmailProcessor({ sender, logger }), {
@@ -243,7 +206,7 @@ if (env.MONITORING_ENABLED) {
       // see createAlertProcessor for why there is no catch-all fallback.
       transports: {
         WEBHOOK: webhookTransport,
-        EMAIL: emailAlertTransport(emailProvider, env.WEB_URL),
+        EMAIL: emailAlertTransport(sender, env.WEB_URL),
         SLACK: slackAlertTransport({ prisma, webUrl: env.WEB_URL }),
         DISCORD: discordAlertTransport({ prisma, webUrl: env.WEB_URL }),
         TELEGRAM: telegramAlertTransport({ prisma, webUrl: env.WEB_URL }),
