@@ -23,6 +23,8 @@ import { onCallSchedulesRouter } from "./routes/oncall-schedules.js";
 import { organizationsRouter } from "./routes/organizations.js";
 import { slackIntegrationRouter } from "./routes/integrations/slack.js";
 import { discordIntegrationRouter } from "./routes/integrations/discord.js";
+import { telegramIntegrationRouter } from "./routes/integrations/telegram.js";
+import { msTeamsIntegrationRouter } from "./routes/integrations/msteams.js";
 import { webhookIntegrationRouter } from "./routes/integrations/webhook.js";
 import { integrationDeliveriesRouter } from "./routes/integrations/deliveries.js";
 import { stripeWebhookRouter } from "./routes/billing/webhooks.js";
@@ -280,6 +282,24 @@ export function createServer(deps: ServerDeps): Express {
     "/organizations/:organizationId/integrations/discord",
     authn,
     discordIntegrationRouter({
+      prisma: deps.prisma,
+      auditLogs,
+      dispatcher: deps.integrationDispatcher,
+    }),
+  );
+  v1.use(
+    "/organizations/:organizationId/integrations/telegram",
+    authn,
+    telegramIntegrationRouter({
+      prisma: deps.prisma,
+      auditLogs,
+      dispatcher: deps.integrationDispatcher,
+    }),
+  );
+  v1.use(
+    "/organizations/:organizationId/integrations/msteams",
+    authn,
+    msTeamsIntegrationRouter({
       prisma: deps.prisma,
       auditLogs,
       dispatcher: deps.integrationDispatcher,

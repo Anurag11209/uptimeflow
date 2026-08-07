@@ -52,6 +52,10 @@ function blockCapability(cap: string): PlanLimitsService {
 const SLACK_INTEGRATION_ID = "018f5a2c-0000-7000-8000-000000000001";
 const SLACK_CONFIG = { integrationId: SLACK_INTEGRATION_ID };
 const SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/T000/B000/xxxx";
+const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/123/abc";
+const TEAMS_WEBHOOK_URL = "https://prod-1.westus.logic.azure.com/workflows/abc/triggers/manual/paths/invoke";
+const TELEGRAM_BOT_TOKEN = "123456789:AAFAKE_test_fixture_not_a_real_token";
+const TELEGRAM_CHAT_ID = "-1001234567890";
 
 function makeP(
   overrides: {
@@ -82,6 +86,19 @@ function makeP(
     },
     slackIntegration: {
       findFirst: vi.fn(async () => slackIntegration),
+    },
+    // The other integration-backed providers resolve through the same helper;
+    // `slackIntegration: null` in overrides models "unresolvable" for all four.
+    discordIntegration: {
+      findFirst: vi.fn(async () => (slackIntegration ? { webhookUrl: DISCORD_WEBHOOK_URL } : null)),
+    },
+    msTeamsIntegration: {
+      findFirst: vi.fn(async () => (slackIntegration ? { webhookUrl: TEAMS_WEBHOOK_URL } : null)),
+    },
+    telegramIntegration: {
+      findFirst: vi.fn(async () =>
+        slackIntegration ? { botToken: TELEGRAM_BOT_TOKEN, chatId: TELEGRAM_CHAT_ID } : null,
+      ),
     },
   } as unknown as PrismaClient;
 }
@@ -168,12 +185,13 @@ describe("create", () => {
   it("does not check capability for WEBHOOK, SLACK, DISCORD, PAGERDUTY, OPSGENIE", async () => {
     const limits = passingLimits();
     const types = ["WEBHOOK", "SLACK", "DISCORD", "PAGERDUTY", "OPSGENIE"] as const;
+    const validated = ["SLACK", "DISCORD"];
     for (const type of types) {
       const svc = makeService(makeP(), limits);
-      // SLACK is the one type with config validation, so give it a real config.
+      // Integration-backed types are config-validated, so give them a real one.
       await svc.create(
         "org_1",
-        { type, name: type, config: type === "SLACK" ? SLACK_CONFIG : {} },
+        { type, name: type, config: validated.includes(type) ? SLACK_CONFIG : {} },
         actor,
       );
     }
@@ -478,7 +496,9 @@ describe("test", () => {
   });
 
   it("rejects a channel type that cannot deliver, without any network call", async () => {
-    const prisma = makeP({ findFirst: { ...mockRow, type: "TELEGRAM" } });
+    // PAGERDUTY still has no transport; TELEGRAM does now, so it moved out of
+    // this guard and into the integration-backed suite below.
+    const prisma = makeP({ findFirst: { ...mockRow, type: "PAGERDUTY" } });
     const { fetchImpl, calls } = makeFetch({ status: 200 });
     const svc = makeService(prisma, passingLimits(), fetchImpl);
 
@@ -510,4 +530,113 @@ describe("test", () => {
       }),
     );
   });
+});
+
+// ── Discord / Teams / Telegram channels ───────────────────────────────────────
+
+// All three follow the Slack pattern: config is { integrationId }, validated
+// with the same resolver the worker's transport calls at send time.
+describe("integration-backed channels (DISCORD, MICROSOFT_TEAMS, TELEGRAM)", () => {
+  const TYPES = ["DISCORD", "MICROSOFT_TEAMS", "TELEGRAM"] as const;
+
+  it.each(TYPES)("creates a %s channel with a resolvable integration", async (type) => {
+    const prisma = makeP();
+    const svc = makeService(prisma);
+    await svc.create("org_1", { type, name: type, config: SLACK_CONFIG }, actor);
+    expect(prisma.alertChannel.create).toHaveBeenCalled();
+  });
+
+  it.each(TYPES)("rejects a %s config with no integrationId", async (type) => {
+    const prisma = makeP();
+    const svc = makeService(prisma);
+    await expect(svc.create("org_1", { type, name: type, config: {} }, actor)).rejects.toThrow(
+      /integrationId/i,
+    );
+    expect(prisma.alertChannel.create).not.toHaveBeenCalled();
+  });
+
+  it.each(TYPES)("rejects a %s integration that does not resolve", async (type) => {
+    const prisma = makeP({ slackIntegration: null });
+    const svc = makeService(prisma);
+    await expect(
+      svc.create("org_1", { type, name: type, config: SLACK_CONFIG }, actor),
+    ).rejects.toThrow(/no longer exists/i);
+    expect(prisma.alertChannel.create).not.toHaveBeenCalled();
+  });
+
+  it.each(TYPES)("test-sends over %s and stamps verifiedAt", async (type) => {
+    const prisma = makeP({ findFirst: { ...mockRow, type, name: `Ops ${type}`, config: SLACK_CONFIG } });
+    const { fetchImpl, calls } = makeFetch({ status: 200, body: "ok" });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    const result = await svc.test("org_1", "chan_1", actor);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(calls).toHaveLength(1);
+    expect(prisma.alertChannel.update).toHaveBeenCalledWith({
+      where: { id: "chan_1" },
+      data: { verifiedAt: result!.verifiedAt },
+    });
+  });
+
+  it.each(TYPES)("surfaces the provider's rejection for %s without stamping verifiedAt", async (type) => {
+    const prisma = makeP({ findFirst: { ...mockRow, type, config: SLACK_CONFIG } });
+    const { fetchImpl } = makeFetch({ status: 403, body: "forbidden" });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    await expect(svc.test("org_1", "chan_1", actor)).rejects.toThrow(/403.*forbidden/);
+    expect(prisma.alertChannel.update).not.toHaveBeenCalled();
+  });
+
+  it("posts Telegram sendMessage to the api.telegram.org bot endpoint", async () => {
+    const prisma = makeP({ findFirst: { ...mockRow, type: "TELEGRAM", config: SLACK_CONFIG } });
+    const { fetchImpl, calls } = makeFetch({ status: 200 });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    await svc.test("org_1", "chan_1", actor);
+
+    expect(calls[0]!.url).toBe(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`);
+    expect(calls[0]!.body).toMatchObject({ chat_id: TELEGRAM_CHAT_ID });
+  });
+
+  // The bot token must not reach an API error body — it is rendered in the UI.
+  it("never leaks the Telegram bot token into the API error", async () => {
+    const prisma = makeP({ findFirst: { ...mockRow, type: "TELEGRAM", config: SLACK_CONFIG } });
+    const fetchImpl = (async () => {
+      throw new Error(`connect ETIMEDOUT https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`);
+    }) as any;
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    await expect(svc.test("org_1", "chan_1", actor)).rejects.toThrow(
+      expect.objectContaining({
+        message: expect.not.stringContaining(TELEGRAM_BOT_TOKEN.split(":")[1]!),
+      }),
+    );
+  });
+
+  it("posts an Adaptive Card envelope for Microsoft Teams", async () => {
+    const prisma = makeP({ findFirst: { ...mockRow, type: "MICROSOFT_TEAMS", config: SLACK_CONFIG } });
+    const { fetchImpl, calls } = makeFetch({ status: 202 });
+    const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+    await svc.test("org_1", "chan_1", actor);
+
+    expect(calls[0]!.url).toBe(TEAMS_WEBHOOK_URL);
+    expect(calls[0]!.body).toMatchObject({
+      type: "message",
+      attachments: [{ contentType: "application/vnd.microsoft.card.adaptive" }],
+    });
+  });
+
+  it.each(["SMS", "VOICE", "PAGERDUTY", "OPSGENIE"] as const)(
+    "still refuses to test %s, which has no transport",
+    async (type) => {
+      const prisma = makeP({ findFirst: { ...mockRow, type } });
+      const { fetchImpl, calls } = makeFetch({ status: 200 });
+      const svc = makeService(prisma, passingLimits(), fetchImpl);
+
+      await expect(svc.test("org_1", "chan_1", actor)).rejects.toThrow(/cannot deliver yet/i);
+      expect(calls).toHaveLength(0);
+    },
+  );
 });

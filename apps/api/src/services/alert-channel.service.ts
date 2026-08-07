@@ -1,7 +1,20 @@
 import { AppError, buildPage, type Page } from "@backend-uptime/shared";
 import type { AlertChannelType, Prisma, PrismaClient } from "@backend-uptime/db";
-import { resolveSlackWebhookUrl } from "@backend-uptime/monitoring";
-import { SlackNotifier, type FetchLike } from "@backend-uptime/notifications";
+import {
+  resolveSlackWebhookUrl,
+  resolveDiscordWebhookUrl,
+  resolveMsTeamsWebhookUrl,
+  resolveTelegramCredentials,
+} from "@backend-uptime/monitoring";
+import {
+  DiscordNotifier,
+  MsTeamsNotifier,
+  SlackNotifier,
+  TelegramNotifier,
+  type DeliveryResult,
+  type FetchLike,
+  type IntegrationEvent,
+} from "@backend-uptime/notifications";
 import { parseCursor } from "./cursor.js";
 import { afterCursorDesc } from "./cursor.js";
 import type { AuditLogService } from "./audit-log.service.js";
@@ -153,10 +166,68 @@ const GATED_TYPES: Partial<Record<AlertChannelType, "sms" | "voice">> = {
   VOICE: "voice",
 };
 
-/** Channel types this build can actually deliver to. Kept in sync with the
- *  worker's transport map (apps/worker/src/index.ts); anything else records a
- *  FAILED delivery rather than a phantom success. */
-const TESTABLE_TYPES: AlertChannelType[] = ["SLACK"];
+/**
+ * Integration-backed channel types: each stores `{ integrationId }` pointing at
+ * a per-provider integration row, and each has a real transport in the worker.
+ *
+ * One registry drives three things that must never disagree: which configs are
+ * validated at write time, which channels the test endpoint can exercise, and
+ * which types the UI offers a test button for. `validate` and `send` share the
+ * same resolver the worker's transport uses, so "saved successfully" and
+ * "delivers" cannot drift apart.
+ *
+ * Kept in sync with the worker's transport map (apps/worker/src/index.ts). A
+ * type absent here records a FAILED delivery rather than a phantom success.
+ */
+interface ChannelProvider {
+  label: string;
+  /** Resolve the credential, throwing if the config cannot deliver. */
+  resolve(prisma: PrismaClient, organizationId: string, config: unknown): Promise<unknown>;
+  send(
+    prisma: PrismaClient,
+    organizationId: string,
+    config: unknown,
+    event: IntegrationEvent,
+    fetchImpl?: FetchLike,
+  ): Promise<DeliveryResult>;
+}
+
+const INTEGRATION_CHANNELS: Partial<Record<AlertChannelType, ChannelProvider>> = {
+  SLACK: {
+    label: "Slack",
+    resolve: resolveSlackWebhookUrl,
+    async send(prisma, organizationId, config, event, fetchImpl) {
+      const url = await resolveSlackWebhookUrl(prisma, organizationId, config);
+      return SlackNotifier.send(url, event, { fetchImpl });
+    },
+  },
+  DISCORD: {
+    label: "Discord",
+    resolve: resolveDiscordWebhookUrl,
+    async send(prisma, organizationId, config, event, fetchImpl) {
+      const url = await resolveDiscordWebhookUrl(prisma, organizationId, config);
+      return DiscordNotifier.send(url, event, { fetchImpl });
+    },
+  },
+  TELEGRAM: {
+    label: "Telegram",
+    resolve: resolveTelegramCredentials,
+    async send(prisma, organizationId, config, event, fetchImpl) {
+      const { botToken, chatId } = await resolveTelegramCredentials(prisma, organizationId, config);
+      return TelegramNotifier.send(botToken, chatId, event, { fetchImpl });
+    },
+  },
+  MICROSOFT_TEAMS: {
+    label: "Microsoft Teams",
+    resolve: resolveMsTeamsWebhookUrl,
+    async send(prisma, organizationId, config, event, fetchImpl) {
+      const url = await resolveMsTeamsWebhookUrl(prisma, organizationId, config);
+      return MsTeamsNotifier.send(url, event, { fetchImpl });
+    },
+  },
+};
+
+const TESTABLE_TYPES = Object.keys(INTEGRATION_CHANNELS) as AlertChannelType[];
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
@@ -177,22 +248,22 @@ export function createAlertChannelService(deps: {
    * edit (a rename would fail on config saved before the rule existed), so
    * those stay permissive until each gets a transport of its own.
    *
-   * SLACK reuses `resolveSlackWebhookUrl` — the exact function the transport
-   * calls at send time — so "valid at write time" and "deliverable at send
-   * time" cannot drift apart.
+   * Each provider reuses the exact resolver its transport calls at send time,
+   * so "valid at write time" and "deliverable at send time" cannot drift apart.
    */
   async function assertValidConfig(
     organizationId: string,
     type: AlertChannelType,
     config: Record<string, unknown>,
   ): Promise<void> {
-    if (type !== "SLACK") return;
+    const provider = INTEGRATION_CHANNELS[type];
+    if (!provider) return;
     try {
-      await resolveSlackWebhookUrl(prisma, organizationId, config);
+      await provider.resolve(prisma, organizationId, config);
     } catch (err) {
       throw new AppError(
         "validation_failed",
-        err instanceof Error ? err.message : "Invalid Slack channel configuration.",
+        err instanceof Error ? err.message : `Invalid ${provider.label} channel configuration.`,
       );
     }
   }
@@ -387,7 +458,8 @@ export function createAlertChannelService(deps: {
       });
       if (!channel) return null;
 
-      if (!TESTABLE_TYPES.includes(channel.type)) {
+      const provider = INTEGRATION_CHANNELS[channel.type];
+      if (!provider) {
         throw new AppError(
           "bad_request",
           `${channel.type} channels cannot deliver yet, so there is nothing to test. ` +
@@ -395,32 +467,31 @@ export function createAlertChannelService(deps: {
         );
       }
 
-      const webhookUrl = await resolveSlackWebhookUrl(prisma, organizationId, channel.config).catch(
-        (err: unknown) => {
+      const event: IntegrationEvent = {
+        event: "test",
+        title: `Test alert from ${channel.name}`,
+        summary: "If you can read this, this channel can page you. No incident was created.",
+        timestamp: new Date().toISOString(),
+      };
+
+      const result = await provider
+        .send(prisma, organizationId, channel.config, event, deps.fetchImpl)
+        .catch((err: unknown) => {
+          // A resolve failure (missing/unknown integration) is a config problem,
+          // not a provider outage — report it as such rather than as a send error.
           throw new AppError(
             "validation_failed",
-            err instanceof Error ? err.message : "Invalid Slack channel configuration.",
+            err instanceof Error ? err.message : `Invalid ${provider.label} channel configuration.`,
           );
-        },
-      );
-
-      const result = await SlackNotifier.send(
-        webhookUrl,
-        {
-          event: "test",
-          title: `Test alert from ${channel.name}`,
-          summary: "If you can read this, this channel can page you. No incident was created.",
-          timestamp: new Date().toISOString(),
-        },
-        { fetchImpl: deps.fetchImpl },
-      );
+        });
 
       if (!result.ok) {
-        // Surface what Slack actually said — "no_service" (revoked webhook) and
-        // "invalid_payload" need very different fixes from the operator.
+        // Surface what the provider actually said — a revoked webhook and a
+        // malformed payload need very different fixes from the operator.
+        // Telegram errors are token-scrubbed by TelegramNotifier before here.
         throw new AppError(
           "bad_request",
-          `Slack rejected the test message (HTTP ${result.status}): ${result.error ?? "unknown error"}`,
+          `${provider.label} rejected the test message (HTTP ${result.status}): ${result.error ?? "unknown error"}`,
         );
       }
 

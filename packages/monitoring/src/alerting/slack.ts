@@ -75,7 +75,7 @@ export function toSlackAlertEvent(payload: AlertPayload, webUrl: string): Integr
     monitorName: payload.monitorName,
     status: opened ? "DOWN" : "RESOLVED",
     severity: payload.severity ?? undefined,
-    url: `${webUrl}/incidents/${payload.incidentId}`,
+    url: `${webUrl}/dashboard/incidents/${payload.incidentId}`,
     timestamp: payload.occurredAt,
   };
 }

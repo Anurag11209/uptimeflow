@@ -25,6 +25,8 @@ describe("integration dispatcher", () => {
       slackIntegration: { findMany: async () => [{ id: "sl_1" }, { id: "sl_2" }] },
       discordIntegration: { findMany: async () => [] },
       webhookIntegration: { findMany: async () => [] },
+      telegramIntegration: { findMany: async () => [] },
+      msTeamsIntegration: { findMany: async () => [] },
       integrationDelivery: {
         create: async ({ data }: { data: Record<string, unknown> }) => {
           created.push(data);
@@ -52,6 +54,12 @@ describe("integration dispatcher", () => {
     expect(created[0]!.dedupeKey).toBe("incident:inc_1:opened:SLACK:sl_1");
     expect(enqueued[0]!.opts?.jobId).toBe("del_1");
     expect(enqueued[0]!.data.event.event).toBe("incident.opened");
+    // Must match the Next.js route (apps/web/app/dashboard/incidents/[id]) and
+    // stay in parity with the Slack alert-channel transport, which builds the
+    // same link — see toSlackAlertEvent.
+    expect(enqueued[0]!.data.event.url).toBe(
+      "https://app.uptimeflow.dev/dashboard/incidents/inc_1",
+    );
   });
 
   it("is idempotent — a dedupeKey conflict skips that target", async () => {
@@ -59,6 +67,8 @@ describe("integration dispatcher", () => {
       slackIntegration: { findMany: async () => [{ id: "sl_1" }] },
       discordIntegration: { findMany: async () => [] },
       webhookIntegration: { findMany: async () => [] },
+      telegramIntegration: { findMany: async () => [] },
+      msTeamsIntegration: { findMany: async () => [] },
       integrationDelivery: {
         create: async () => {
           throw new Error("unique constraint failed: dedupeKey");

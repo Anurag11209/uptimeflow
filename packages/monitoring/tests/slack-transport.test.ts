@@ -130,9 +130,11 @@ describe("toSlackAlertEvent", () => {
     expect(event).toMatchObject({ event: "incident.resolved", status: "RESOLVED" });
   });
 
-  it("builds an incident deep link", () => {
+  it("builds an incident deep link into the dashboard route", () => {
+    // Must match the Next.js route (apps/web/app/dashboard/incidents/[id]) —
+    // a bare /incidents/:id 404s.
     expect(toSlackAlertEvent(payload, "https://app.test").url).toBe(
-      "https://app.test/incidents/inc_1",
+      "https://app.test/dashboard/incidents/inc_1",
     );
   });
 
@@ -173,7 +175,9 @@ describe("slackAlertTransport", () => {
     await slackAlertTransport({ prisma, webUrl: "https://app.test/", fetchImpl })(channel, payload);
 
     const body = calls[0]!.body as { attachments: Array<{ blocks: unknown[] }> };
-    expect(JSON.stringify(body.attachments[0]!.blocks)).toContain("https://app.test/incidents/inc_1");
+    expect(JSON.stringify(body.attachments[0]!.blocks)).toContain(
+      "https://app.test/dashboard/incidents/inc_1",
+    );
   });
 
   it("throws on a non-2xx from Slack so BullMQ retries", async () => {

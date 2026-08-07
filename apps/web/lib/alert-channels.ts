@@ -216,18 +216,19 @@ export function isIntegrationBacked(type: AlertChannelType): boolean {
  * "notification sent" entry appears on the incident timeline. Mirrors the
  * worker's transport map (apps/worker/src/index.ts).
  */
-export const UNDELIVERABLE_TYPES: AlertChannelType[] = [
-  "SMS",
-  "VOICE",
+export const UNDELIVERABLE_TYPES: AlertChannelType[] = ["SMS", "VOICE", "PAGERDUTY", "OPSGENIE"];
+
+/**
+ * Channel types the test-send endpoint can exercise — the integration-backed
+ * ones, whose config is { integrationId }. EMAIL and WEBHOOK deliver but have
+ * no test path (they carry no integration record to resolve).
+ */
+export const TESTABLE_TYPES: AlertChannelType[] = [
+  "SLACK",
   "DISCORD",
   "TELEGRAM",
   "MICROSOFT_TEAMS",
-  "PAGERDUTY",
-  "OPSGENIE",
 ];
-
-/** Channel types the test-send endpoint can exercise. */
-export const TESTABLE_TYPES: AlertChannelType[] = ["SLACK"];
 
 export function canTestChannel(type: AlertChannelType): boolean {
   return TESTABLE_TYPES.includes(type);
