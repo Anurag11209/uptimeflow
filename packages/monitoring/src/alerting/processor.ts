@@ -10,9 +10,15 @@ export interface AlertProcessorLogger {
 
 export interface AlertProcessorDeps {
   prisma: PrismaClient;
-  /** Per-channel-type transports; falls back to `fallback` when absent. */
+  /**
+   * Per-channel-type transports. There is deliberately no fallback: a channel
+   * type absent from this map fails the delivery rather than being quietly
+   * absorbed. A catch-all that returns success would mark alerts DELIVERED and
+   * write a "notification sent" timeline entry for a message nobody received,
+   * which is worse than an outright failure — the customer believes they were
+   * paged. Adding a channel type means adding a real transport.
+   */
   transports?: Partial<Record<AlertChannelType, AlertTransport>>;
-  fallback?: AlertTransport;
   logger?: AlertProcessorLogger;
 }
 
@@ -39,7 +45,9 @@ export function createAlertProcessor(deps: AlertProcessorDeps) {
       select: {
         id: true,
         status: true,
-        channel: { select: { id: true, type: true, name: true, config: true } },
+        // organizationId travels with the channel so a transport that resolves
+        // related rows (e.g. SLACK → SlackIntegration) can scope by tenant.
+        channel: { select: { id: true, organizationId: true, type: true, name: true, config: true } },
         incident: {
           select: {
             id: true,
@@ -58,12 +66,20 @@ export function createAlertProcessor(deps: AlertProcessorDeps) {
       return { deliveryId, skipped: "already_delivered" };
     }
 
-    const transport = transports[delivery.channel.type] ?? deps.fallback;
+    const transport = transports[delivery.channel.type];
     if (!transport) {
+      // Fail closed, and loudly. Returning (rather than throwing) is deliberate:
+      // a retry can never conjure a transport, so BullMQ backoff would only
+      // delay the same outcome. No NOTIFICATION_SENT event is written.
+      const lastError = `No transport configured for channel type ${delivery.channel.type} — nothing was sent.`;
       await deps.prisma.notificationDelivery.update({
         where: { id: delivery.id },
-        data: { status: "FAILED", lastError: `No transport for channel type ${delivery.channel.type}.` },
+        data: { status: "FAILED", lastError },
       });
+      deps.logger?.error(
+        { deliveryId, incidentId, channelId: delivery.channel.id, channelType: delivery.channel.type },
+        "alert not sent — no transport for channel type",
+      );
       return { deliveryId, skipped: "no_transport" };
     }
 

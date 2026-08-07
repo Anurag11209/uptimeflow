@@ -142,6 +142,28 @@ export function useDisableAlertChannel(orgId: string) {
   });
 }
 
+export interface TestSendResult {
+  ok: true;
+  verifiedAt: string;
+}
+
+/**
+ * Send a real test notification through the channel. Synchronous by design —
+ * the API performs the send and reports the provider's actual response, so a
+ * rejection here carries the provider's own error text.
+ */
+export function useTestAlertChannel(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api<TestSendResult>(`${base(orgId)}/${id}/test`, { method: "POST" }),
+    onSuccess: () => {
+      // A successful test stamps verifiedAt on the channel.
+      void qc.invalidateQueries({ queryKey: alertChannelKeys.all(orgId) });
+    },
+  });
+}
+
 // ─── Pure display helpers (unit-tested) ───────────────────────────────────────
 
 export function formatChannelType(type: AlertChannelType): string {
@@ -188,13 +210,25 @@ export function isIntegrationBacked(type: AlertChannelType): boolean {
   return type === "SLACK" || type === "DISCORD" || type === "WEBHOOK";
 }
 
-/** Stub transport — alerting pipeline runs but no real notification is sent. */
-export const STUB_TRANSPORT_TYPES: AlertChannelType[] = [
-  "EMAIL",
+/**
+ * Channel types with no transport in this build. Alerts routed to them are
+ * recorded as FAILED deliveries — they are not silently swallowed, and no
+ * "notification sent" entry appears on the incident timeline. Mirrors the
+ * worker's transport map (apps/worker/src/index.ts).
+ */
+export const UNDELIVERABLE_TYPES: AlertChannelType[] = [
   "SMS",
   "VOICE",
+  "DISCORD",
   "TELEGRAM",
   "MICROSOFT_TEAMS",
   "PAGERDUTY",
   "OPSGENIE",
 ];
+
+/** Channel types the test-send endpoint can exercise. */
+export const TESTABLE_TYPES: AlertChannelType[] = ["SLACK"];
+
+export function canTestChannel(type: AlertChannelType): boolean {
+  return TESTABLE_TYPES.includes(type);
+}

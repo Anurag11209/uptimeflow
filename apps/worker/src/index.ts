@@ -32,7 +32,7 @@ import {
   createRollupQueue,
   createRollupScheduler,
   createScheduler,
-  loggingTransport,
+  slackAlertTransport,
   webhookTransport,
   INTEGRATION_QUEUE_NAME,
   type AlertJobData,
@@ -223,8 +223,14 @@ if (env.MONITORING_ENABLED) {
     ALERT_QUEUE_NAME,
     createAlertProcessor({
       prisma,
-      transports: { WEBHOOK: webhookTransport, EMAIL: emailAlertTransport(emailProvider, env.WEB_URL) },
-      fallback: loggingTransport(logger),
+      // Only channel types listed here can deliver. Anything else fails the
+      // delivery with a real error rather than reporting a phantom success —
+      // see createAlertProcessor for why there is no catch-all fallback.
+      transports: {
+        WEBHOOK: webhookTransport,
+        EMAIL: emailAlertTransport(emailProvider, env.WEB_URL),
+        SLACK: slackAlertTransport({ prisma, webUrl: env.WEB_URL }),
+      },
       logger,
     }),
     { connection: alertWorkerConnection, concurrency: env.MONITOR_CONCURRENCY, stalledInterval: 30_000, maxStalledCount: 2 },

@@ -169,6 +169,24 @@ export function alertChannelsRouter(deps: AlertChannelsRouterDeps): Router {
     },
   );
 
+  // ── Test send ───────────────────────────────────────────────────────────────
+  // Sends a real notification and answers with the result, rather than
+  // enqueueing — see AlertChannelService.test for why this one is synchronous.
+  // Uses the "update" permission, matching the integrations test button.
+  router.post("/:channelId/test", requirePermission("alertChannel", "update"), async (req, res, next) => {
+    try {
+      const result = await deps.channels.test(
+        req.orgContext!.organizationId,
+        channelIdOf(req),
+        actorOf(req),
+      );
+      if (!result) throw AppError.notFound("Alert channel not found.");
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ── Delete ──────────────────────────────────────────────────────────────────
   router.delete(
     "/:channelId",
