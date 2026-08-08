@@ -2,6 +2,7 @@ import type { Job } from "bullmq";
 import type { PrismaClient } from "@backend-uptime/db";
 import type { AlertDispatcher } from "../alerting/dispatcher.js";
 import { whoIsOnCall } from "../oncall/resolve.js";
+import type { ResponderNotifier } from "./notifier.js";
 import { ESCALATION_JOB_NAME, type EscalationJobData } from "./queue.js";
 
 export interface EscalationLogger {
@@ -71,48 +72,147 @@ export interface EscalationProcessorDeps {
   prisma: PrismaClient;
   queue: EscalationEnqueuer;
   alerts: Pick<AlertDispatcher, "dispatchToChannels">;
+  /**
+   * Delivers pages to USER/SCHEDULE responders. Absent means those targets are
+   * resolved and recorded but nobody is contacted — the pre-Phase-2 behaviour,
+   * kept only so existing tests and any caller that has not wired a notifier
+   * yet degrade visibly (the timeline says "0 paged") rather than silently.
+   */
+  responders?: ResponderNotifier;
   logger?: EscalationLogger;
 }
+
+/** Incident fields a page needs, loaded once per step. */
+export interface EscalationIncidentContext {
+  title: string;
+  summary: string | null;
+  severity: string | null;
+  monitorName: string | null;
+}
+
+/** A type alias, not an interface: Prisma's InputJsonValue requires an implicit
+ *  index signature, which interfaces do not get. */
+type ResponderRef = {
+  userId: string;
+  via: string;
+  secondaryUserId?: string | null;
+};
 
 export interface EscalationJobResult {
   incidentId: string;
   skipped?: "no_incident" | "stopped" | "no_policy" | "exhausted";
   stepFired?: number;
   responders?: string[];
+  /** Responders an actual notification was delivered to. */
+  respondersPaged?: number;
+  /** Responders whose page failed (bad address, notifier error, unknown user). */
+  respondersFailed?: number;
   channelsPaged?: number;
   scheduledNext?: boolean;
   repeated?: number;
 }
 
 /**
- * Resolve a step's targets into the channels to page and the human responders to
- * record. SCHEDULE targets resolve to the currently on-call primary responder
- * (secondary is captured for the timeline). CHANNEL targets are dispatched
- * through the alert pipeline; USER targets are recorded for paging.
+ * Resolve a step's targets and actually contact them.
+ *
+ * CHANNEL targets go through the Phase-1 alert transports. USER targets page
+ * that person; SCHEDULE targets page whoever the on-call resolver says is
+ * currently primary. Before Phase 2 the last two were collected into a list,
+ * written to the timeline as "paged N responder(s)", and then dropped on the
+ * floor — the timeline claimed a page that never happened.
+ *
+ * Paging is best-effort per responder: one unreachable address must not abort
+ * the step and leave the rest of the rotation uncontacted, and must not throw,
+ * because a BullMQ retry would re-page everyone who already succeeded. Failures
+ * are counted and named in the timeline instead.
  */
 async function executeStep(
   deps: EscalationProcessorDeps,
-  ctx: { incidentId: string; organizationId: string },
+  ctx: { incidentId: string; organizationId: string; incident: EscalationIncidentContext },
   step: StepRow,
   now: Date,
-): Promise<{ responders: string[]; channelsPaged: number; metadata: Record<string, unknown> }> {
+): Promise<{
+  responders: string[];
+  respondersPaged: number;
+  respondersFailed: number;
+  channelsPaged: number;
+  metadata: Record<string, unknown>;
+}> {
   const channelIds: string[] = [];
-  const responders: Array<{ userId: string; via: string; secondaryUserId?: string | null }> = [];
+  const responders: ResponderRef[] = [];
+  /** A user targeted directly *and* on-call for a schedule in the same step is one person. */
+  const seenUserIds = new Set<string>();
+
+  function addResponder(ref: ResponderRef): void {
+    if (seenUserIds.has(ref.userId)) return;
+    seenUserIds.add(ref.userId);
+    responders.push(ref);
+  }
 
   for (const target of step.targets) {
     if (target.type === "CHANNEL" && target.channelId) {
       channelIds.push(target.channelId);
     } else if (target.type === "USER" && target.userId) {
-      responders.push({ userId: target.userId, via: "user" });
+      addResponder({ userId: target.userId, via: "user" });
     } else if (target.type === "SCHEDULE" && target.scheduleId) {
       const onCall = await whoIsOnCall(deps.prisma, target.scheduleId, now);
       if (onCall?.primaryUserId) {
-        responders.push({
+        addResponder({
           userId: onCall.primaryUserId,
           via: `schedule:${onCall.source}`,
+          // Secondary is recorded for the timeline but not paged — escalating
+          // to the backup is what the next step is for.
           secondaryUserId: onCall.secondaryUserId,
         });
       }
+    }
+  }
+
+  // ── Page the humans ───────────────────────────────────────────────────────
+  const pagedUserIds: string[] = [];
+  const failed: Array<{ userId: string; reason: string }> = [];
+
+  if (responders.length > 0) {
+    if (!deps.responders) {
+      // No notifier wired: record honestly rather than implying a page.
+      for (const r of responders) failed.push({ userId: r.userId, reason: "no responder notifier configured" });
+    } else {
+      const users = await deps.prisma.user.findMany({
+        where: { id: { in: responders.map((r) => r.userId) } },
+        select: { id: true, email: true, name: true },
+      });
+      const byId = new Map(users.map((u) => [u.id, u]));
+
+      await Promise.all(
+        responders.map(async (ref) => {
+          const user = byId.get(ref.userId);
+          if (!user?.email) {
+            failed.push({ userId: ref.userId, reason: "user not found or has no email" });
+            return;
+          }
+          try {
+            await deps.responders!.page({
+              incidentId: ctx.incidentId,
+              organizationId: ctx.organizationId,
+              userId: user.id,
+              email: user.email,
+              userName: user.name,
+              via: ref.via,
+              step: step.position,
+              incidentTitle: ctx.incident.title,
+              severity: ctx.incident.severity,
+              summary: ctx.incident.summary,
+              monitorName: ctx.incident.monitorName,
+            });
+            pagedUserIds.push(user.id);
+          } catch (err) {
+            failed.push({
+              userId: ref.userId,
+              reason: err instanceof Error ? err.message.slice(0, 200) : "page failed",
+            });
+          }
+        }),
+      );
     }
   }
 
@@ -126,12 +226,23 @@ async function executeStep(
     });
   }
 
-  const metadata = { step: step.position, responders, channelIds };
+  const metadata = {
+    step: step.position,
+    responders,
+    channelIds,
+    pagedUserIds,
+    failedPages: failed,
+  };
+  // The message reports what actually happened, including failures — this line
+  // is what an operator reads when asking "was I paged?".
+  const failureNote = failed.length > 0 ? `, ${failed.length} page(s) failed` : "";
   await deps.prisma.incidentEvent.create({
     data: {
       incidentId: ctx.incidentId,
       type: "ESCALATED",
-      message: `Escalation step ${step.position}: paged ${responders.length} responder(s) and ${channelsPaged} channel(s).`,
+      message:
+        `Escalation step ${step.position}: paged ${pagedUserIds.length} responder(s) ` +
+        `and ${channelsPaged} channel(s)${failureNote}.`,
       metadata,
       createdAt: now,
     },
@@ -147,7 +258,20 @@ async function executeStep(
     },
   });
 
-  return { responders: responders.map((r) => r.userId), channelsPaged, metadata };
+  if (failed.length > 0) {
+    deps.logger?.warn(
+      { incidentId: ctx.incidentId, step: step.position, failed },
+      "escalation could not page every responder",
+    );
+  }
+
+  return {
+    responders: responders.map((r) => r.userId),
+    respondersPaged: pagedUserIds.length,
+    respondersFailed: failed.length,
+    channelsPaged,
+    metadata,
+  };
 }
 
 /**
@@ -165,10 +289,21 @@ export function createEscalationProcessor(deps: EscalationProcessorDeps) {
 
     const incident = await deps.prisma.incident.findUnique({
       where: { id: incidentId },
-      select: { status: true },
+      select: {
+        status: true,
+        title: true,
+        summary: true,
+        severity: true,
+        monitor: { select: { name: true } },
+      },
     });
     if (!incident) return { incidentId, skipped: "no_incident" };
-    // Acknowledgement / resolution handling: a non-OPEN incident halts escalation.
+    // Acknowledgement / resolution handling. This is the guard that makes a
+    // resolved or acknowledged incident stop paging people, and it runs before
+    // the policy is even loaded: a delayed step that fires after the incident
+    // closed reads one row, sends nothing, and — because it returns here —
+    // queues no successor, so the rest of the chain dies with it. No job
+    // cancellation is involved; state is the single source of truth.
     if (incident.status !== "OPEN") {
       deps.logger?.info({ incidentId, status: incident.status }, "escalation halted");
       return { incidentId, skipped: "stopped" };
@@ -205,7 +340,21 @@ export function createEscalationProcessor(deps: EscalationProcessorDeps) {
       return { incidentId, skipped: "exhausted" };
     }
 
-    const fired = await executeStep(deps, { incidentId, organizationId }, step, now);
+    const fired = await executeStep(
+      deps,
+      {
+        incidentId,
+        organizationId,
+        incident: {
+          title: incident.title,
+          summary: incident.summary,
+          severity: incident.severity,
+          monitorName: incident.monitor?.name ?? null,
+        },
+      },
+      step,
+      now,
+    );
 
     let scheduledNext = false;
     const next = steps[stepIndex + 1];
@@ -229,6 +378,8 @@ export function createEscalationProcessor(deps: EscalationProcessorDeps) {
       incidentId,
       stepFired: step.position,
       responders: fired.responders,
+      respondersPaged: fired.respondersPaged,
+      respondersFailed: fired.respondersFailed,
       channelsPaged: fired.channelsPaged,
       scheduledNext,
     };

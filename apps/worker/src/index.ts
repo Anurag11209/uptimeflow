@@ -49,6 +49,7 @@ import {
   QUEUE_NAMES,
   createEmailProcessor,
   createEmailProvider,
+  createEmailQueue,
   createEmailSender,
   createQueueConnection,
   emailSenderFromProvider,
@@ -58,6 +59,7 @@ import {
 } from "@backend-uptime/notifications";
 import type { EmailConfig } from "@backend-uptime/config/email";
 import { emailAlertTransport } from "./email-transport.js";
+import { emailResponderNotifier } from "./responder-notifier.js";
 import { parseEnv } from "./env.js";
 
 const env = parseEnv(process.env);
@@ -236,10 +238,17 @@ if (env.MONITORING_ENABLED) {
     await escalationConnection.quit().catch(() => escalationConnection.disconnect());
   });
 
+  // Escalation pages USER/SCHEDULE responders by email. Producer-side queue on
+  // the shared connection; the email Worker above drains it with the real
+  // SMTP/SES sender, so a page is a genuine send, not a log line.
+  const responderEmailQueue = createEmailQueue(queueConnection);
+  const responders = emailResponderNotifier({ queue: responderEmailQueue, webUrl: env.WEB_URL });
+  closers.push(() => responderEmailQueue.close());
+
   const escalationWorkerConnection = createMonitorConnection(env.REDIS_URL);
   const escalationWorker = new Worker<EscalationJobData>(
     ESCALATION_QUEUE_NAME,
-    createEscalationProcessor({ prisma, queue: escalationQueue, alerts, logger }),
+    createEscalationProcessor({ prisma, queue: escalationQueue, alerts, responders, logger }),
     { connection: escalationWorkerConnection, concurrency: env.MONITOR_CONCURRENCY, stalledInterval: 30_000, maxStalledCount: 2 },
   );
   escalationWorker.on("ready", () => logger.info({ queue: ESCALATION_QUEUE_NAME }, "escalation worker ready"));

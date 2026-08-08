@@ -332,8 +332,21 @@ export async function processCheckResult(
           resourceId: incidentId,
           metadata: { monitorId: monitor.id, region: opts.region, errorType: outcome.errorType ?? null },
         });
-        // With an escalation policy, paging is driven by the escalation engine
-        // (timed multi-step); otherwise blast the monitor's channels directly.
+        // The monitor's bound channels are always paged immediately; an
+        // escalation policy adds the timed human follow-up on top rather than
+        // replacing it.
+        //
+        // This used to be either/or, which meant a monitor WITH a policy sent
+        // nothing on the way down — while the resolve branch below has always
+        // dispatched unconditionally. The result was a recovery notice for an
+        // outage nobody was ever told about. Open now mirrors resolve.
+        alertsEnqueued =
+          (await opts.alerts?.dispatch({
+            incidentId,
+            organizationId: monitor.organizationId,
+            monitorId: monitor.id,
+            kind: "opened",
+          })) ?? 0;
         if (monitor.escalationPolicyId && opts.escalation) {
           await opts.escalation.start({
             incidentId,
@@ -341,14 +354,6 @@ export async function processCheckResult(
             monitorId: monitor.id,
             policyId: monitor.escalationPolicyId,
           });
-        } else {
-          alertsEnqueued =
-            (await opts.alerts?.dispatch({
-              incidentId,
-              organizationId: monitor.organizationId,
-              monitorId: monitor.id,
-              kind: "opened",
-            })) ?? 0;
         }
         // Integrations (Slack/Discord/webhooks) fan out independently of the
         // escalation/alert-channel routing. Best-effort: never fail a check.
