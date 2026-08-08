@@ -175,3 +175,81 @@ describe("heartbeat handling", () => {
     expect(await recordHeartbeat(prisma, "missing")).toBeNull();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 2: escalation no longer suppresses the down-alert
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("escalation and alert dispatch on open", () => {
+  function spyEscalation() {
+    const started: Array<{ incidentId: string; policyId: string }> = [];
+    return {
+      started,
+      escalation: {
+        start: async (ctx: { incidentId: string; policyId: string }) => {
+          started.push(ctx);
+          return true;
+        },
+      },
+    };
+  }
+
+  // The regression this phase exists to fix: a monitor WITH an escalation
+  // policy used to take an either/or branch that skipped alerts.dispatch on
+  // open, while resolve dispatched unconditionally — so the only message a
+  // customer ever received for such a monitor was "recovered".
+  it("dispatches to bound channels AND starts escalation when a policy is set", async () => {
+    const { prisma } = mockPrisma();
+    const { alerts, calls } = spyDispatcher();
+    const { escalation, started } = spyEscalation();
+
+    const r = await processCheckResult(
+      prisma,
+      snap({ health: "UP", failureThreshold: 2, consecutiveFailures: 1, escalationPolicyId: "pol_1" }),
+      down,
+      { region: REGION, alerts, escalation },
+    );
+
+    expect(r.transition).toBe("down");
+    expect(calls).toEqual([
+      { incidentId: "inc_1", organizationId: "org_1", monitorId: "mon_1", kind: "opened" },
+    ]);
+    expect(started).toEqual([
+      { incidentId: "inc_1", organizationId: "org_1", monitorId: "mon_1", policyId: "pol_1" },
+    ]);
+    expect(r.alertsEnqueued).toBe(1);
+  });
+
+  it("still dispatches on open when no policy is set", async () => {
+    const { prisma } = mockPrisma();
+    const { alerts, calls } = spyDispatcher();
+    const { escalation, started } = spyEscalation();
+
+    await processCheckResult(
+      prisma,
+      snap({ health: "UP", failureThreshold: 2, consecutiveFailures: 1, escalationPolicyId: null }),
+      down,
+      { region: REGION, alerts, escalation },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(started).toHaveLength(0);
+  });
+
+  // Open and resolve must be symmetric — resolve has always dispatched.
+  it("dispatches on resolve for a monitor with a policy", async () => {
+    const { prisma } = mockPrisma({ openIncident: { id: "inc_1", startedAt: new Date(Date.now() - 60_000) } });
+    const { alerts, calls } = spyDispatcher();
+
+    await processCheckResult(
+      prisma,
+      snap({ health: "RECOVERING", successThreshold: 1, consecutiveSuccesses: 0, escalationPolicyId: "pol_1" }),
+      up,
+      { region: REGION, alerts },
+    );
+
+    expect(calls).toEqual([
+      { incidentId: "inc_1", organizationId: "org_1", monitorId: "mon_1", kind: "resolved" },
+    ]);
+  });
+});
