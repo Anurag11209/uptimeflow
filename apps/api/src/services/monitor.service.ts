@@ -88,6 +88,12 @@ export interface AssertionView {
   expected: string;
 }
 
+/** Minimal per-check snapshot for the list-view heartbeat strip. */
+export interface RecentCheckPoint {
+  status: CheckStatus;
+  checkedAt: Date;
+}
+
 export interface MonitorListItem {
   id: string;
   name: string;
@@ -107,9 +113,17 @@ export interface MonitorListItem {
   escalationPolicyId: string | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Most recent checks (newest last), bounded and index-backed via
+   * [monitorId, checkedAt desc]. Powers the heartbeat strip in the monitor
+   * list without a second round-trip per row. Not populated on
+   * MonitorDetail — the detail page already has full history via
+   * `listCheckResults`/`useCheckResults`.
+   */
+  recentChecks: RecentCheckPoint[];
 }
 
-export interface MonitorDetail extends MonitorListItem {
+export interface MonitorDetail extends Omit<MonitorListItem, "recentChecks"> {
   httpMethod: HttpMethod | null;
   requestHeaders: Record<string, string> | null;
   requestBody: string | null;
@@ -196,6 +210,9 @@ export interface MonitorService {
 
 // ─── Prisma select shapes ─────────────────────────────────────────────────────
 
+/** Bars shown in the list-view heartbeat strip. Keep in sync with the frontend. */
+const HEARTBEAT_STRIP_SIZE = 24;
+
 const LIST_SELECT = {
   id: true,
   name: true,
@@ -215,6 +232,11 @@ const LIST_SELECT = {
   escalationPolicyId: true,
   createdAt: true,
   updatedAt: true,
+  checkResults: {
+    select: { status: true, checkedAt: true },
+    orderBy: { checkedAt: "desc" as const },
+    take: HEARTBEAT_STRIP_SIZE,
+  },
 } satisfies Prisma.MonitorSelect;
 
 const DETAIL_SELECT = {
@@ -283,6 +305,11 @@ function toListItem(row: ListRow): MonitorListItem {
     escalationPolicyId: row.escalationPolicyId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    // Reverse to chronological order (oldest → newest) for left-to-right rendering.
+    recentChecks: [...row.checkResults].reverse().map((c) => ({
+      status: c.status,
+      checkedAt: c.checkedAt,
+    })),
   };
 }
 
