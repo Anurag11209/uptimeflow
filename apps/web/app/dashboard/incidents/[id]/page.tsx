@@ -32,13 +32,13 @@ import {
   useIncident,
   type IncidentTimelineEvent,
 } from "@/lib/incidents";
+import { useSetBreadcrumbLabel } from "@/components/breadcrumb-context";
 import { hasPermission } from "@backend-uptime/shared";
 
 // Code-split the SVG chart into its own chunk — it's only needed on this page.
-const LineChart = dynamic(
-  () => import("@/components/charts/line-chart").then((m) => m.LineChart),
-  { loading: () => <Skeleton className="h-40 w-full" /> },
-);
+const LineChart = dynamic(() => import("@/components/charts/line-chart").then((m) => m.LineChart), {
+  loading: () => <Skeleton className="h-40 w-full" />,
+});
 
 export default function IncidentDetailPage() {
   const params = useParams<{ id: string }>();
@@ -48,11 +48,10 @@ export default function IncidentDetailPage() {
   const orgId = activeOrg?.organization.id;
   const role = activeOrg?.role;
   const canRead = role ? hasPermission(role, "monitor", ["read"]) : false;
-  const canManage = role
-    ? hasPermission(role, "monitor", ["create", "update", "delete"])
-    : false;
+  const canManage = role ? hasPermission(role, "monitor", ["create", "update", "delete"]) : false;
 
   const incident = useIncident(orgId, canRead ? id : undefined);
+  useSetBreadcrumbLabel(id, incident.data?.title);
   const monitorId = incident.data?.monitorId ?? undefined;
 
   const monitor = useMonitor(orgId, monitorId);
@@ -67,24 +66,13 @@ export default function IncidentDetailPage() {
   }, [members.data]);
 
   const events = incident.data?.events ?? [];
-  const alertEvents = useMemo(
-    () => events.filter((e) => e.type === "NOTIFICATION_SENT"),
-    [events],
-  );
-  const comments = useMemo(
-    () => events.filter((e) => e.type === "COMMENT"),
-    [events],
-  );
-  const latencyPoints = useMemo(
-    () => toLatencyPoints(checks.data?.items ?? []),
-    [checks.data],
-  );
+  const alertEvents = useMemo(() => events.filter((e) => e.type === "NOTIFICATION_SENT"), [events]);
+  const comments = useMemo(() => events.filter((e) => e.type === "COMMENT"), [events]);
+  const latencyPoints = useMemo(() => toLatencyPoints(checks.data?.items ?? []), [checks.data]);
 
   if (orgPending) return <DetailSkeleton />;
   if (!canRead) {
-    return (
-      <Alert tone="warning">You do not have permission to view incidents.</Alert>
-    );
+    return <Alert tone="warning">You do not have permission to view incidents.</Alert>;
   }
   if (incident.isPending) return <DetailSkeleton />;
   if (incident.error || !incident.data) {
@@ -92,9 +80,7 @@ export default function IncidentDetailPage() {
       <div className="flex flex-col gap-4">
         <BackLink />
         <Alert tone="error">
-          {incident.error instanceof ApiError
-            ? incident.error.message
-            : "Incident not found."}
+          {incident.error instanceof ApiError ? incident.error.message : "Incident not found."}
         </Alert>
       </div>
     );
@@ -112,16 +98,12 @@ export default function IncidentDetailPage() {
           <div className="flex flex-wrap items-center gap-2">
             <IncidentStatusBadge status={inc.status} />
             <SeverityBadge severity={inc.severity} />
-            {inc.status !== "RESOLVED" ? (
-              <span className="text-xs text-muted">· live</span>
-            ) : null}
+            {inc.status !== "RESOLVED" ? <span className="text-xs text-muted">· live</span> : null}
           </div>
           <h1 className="mt-2 font-[family-name:var(--font-display)] text-xl font-semibold text-text">
             {inc.title}
           </h1>
-          {inc.summary ? (
-            <p className="mt-1 text-sm text-muted">{inc.summary}</p>
-          ) : null}
+          {inc.summary ? <p className="mt-1 text-sm text-muted">{inc.summary}</p> : null}
         </div>
         <IncidentActions orgId={orgId!} incident={inc} canManage={canManage} />
       </header>
@@ -136,11 +118,7 @@ export default function IncidentDetailPage() {
         <Meta label="Duration" value={formatDuration(liveDurationSec(inc))} />
         <Meta
           label="Acknowledged"
-          value={
-            inc.acknowledgedById
-              ? (actors.get(inc.acknowledgedById) ?? "Yes")
-              : "—"
-          }
+          value={inc.acknowledgedById ? (actors.get(inc.acknowledgedById) ?? "Yes") : "—"}
         />
         <Meta
           label="Impacted regions"
@@ -164,7 +142,11 @@ export default function IncidentDetailPage() {
             ) : (
               <ul className="mb-4 flex flex-col gap-3">
                 {comments.map((c) => (
-                  <CommentItem key={c.id} event={c} author={c.actorId ? actors.get(c.actorId) : null} />
+                  <CommentItem
+                    key={c.id}
+                    event={c}
+                    author={c.actorId ? actors.get(c.actorId) : null}
+                  />
                 ))}
               </ul>
             )}
@@ -217,9 +199,7 @@ export default function IncidentDetailPage() {
 
           <Card className="p-5">
             <Heading>Root cause</Heading>
-            <p className="text-sm text-muted">
-              {inc.cause ?? "No root cause recorded."}
-            </p>
+            <p className="text-sm text-muted">{inc.cause ?? "No root cause recorded."}</p>
           </Card>
 
           <Card className="p-5">
@@ -232,9 +212,7 @@ export default function IncidentDetailPage() {
                   <li key={e.id} className="flex items-center gap-2 text-sm">
                     <Bell className="size-3.5 text-muted" aria-hidden />
                     <span className="flex-1 text-text">{e.message ?? "Alert sent"}</span>
-                    <span className="text-xs text-muted">
-                      {formatRelativeTime(e.createdAt)}
-                    </span>
+                    <span className="text-xs text-muted">{formatRelativeTime(e.createdAt)}</span>
                   </li>
                 ))}
               </ul>
