@@ -26,7 +26,8 @@ interface Command {
   keywords?: string;
 }
 
-const NAV_COMMANDS: Command[] = [
+/** Shown by default with an empty query — kept short so it's scannable at a glance. */
+const TOP_LEVEL_COMMANDS: Command[] = [
   { id: "nav-overview", label: "Overview", href: "/dashboard", icon: Activity },
   { id: "nav-monitors", label: "Monitors", href: "/dashboard/monitors", icon: Radar },
   { id: "nav-incidents", label: "Incidents", href: "/dashboard/incidents", icon: Siren },
@@ -45,6 +46,88 @@ const NAV_COMMANDS: Command[] = [
     href: "/dashboard/monitors/new",
     icon: Radar,
     keywords: "create add",
+  },
+];
+
+/** Only surfaced once the person is actively typing — keeps the default list
+ * short while still making every settings page reachable by name. */
+const SETTINGS_COMMANDS: Command[] = [
+  {
+    id: "nav-settings-profile",
+    label: "Profile",
+    href: "/dashboard/settings/profile",
+    icon: Settings,
+    keywords: "settings account",
+  },
+  {
+    id: "nav-settings-organization",
+    label: "Organization",
+    href: "/dashboard/settings/organization",
+    icon: Settings,
+    keywords: "settings org name",
+  },
+  {
+    id: "nav-settings-members",
+    label: "Members",
+    href: "/dashboard/settings/members",
+    icon: Settings,
+    keywords: "settings team invite",
+  },
+  {
+    id: "nav-settings-alert-channels",
+    label: "Alert channels",
+    href: "/dashboard/settings/alert-channels",
+    icon: Settings,
+    keywords: "settings notifications slack email sms webhook",
+  },
+  {
+    id: "nav-settings-escalation-policies",
+    label: "Escalation policies",
+    href: "/dashboard/settings/escalation-policies",
+    icon: Settings,
+    keywords: "settings escalation",
+  },
+  {
+    id: "nav-settings-oncall-schedules",
+    label: "On-call schedules",
+    href: "/dashboard/settings/oncall-schedules",
+    icon: Settings,
+    keywords: "settings oncall rotation",
+  },
+  {
+    id: "nav-settings-integrations",
+    label: "Integrations",
+    href: "/dashboard/settings/integrations",
+    icon: Settings,
+    keywords: "settings",
+  },
+  {
+    id: "nav-settings-domains",
+    label: "Domains",
+    href: "/dashboard/settings/domains",
+    icon: Settings,
+    keywords: "settings dns",
+  },
+  {
+    id: "nav-settings-api-keys",
+    label: "API keys",
+    href: "/dashboard/settings/api-keys",
+    icon: Settings,
+    keywords: "settings api token",
+  },
+  {
+    id: "nav-settings-audit-logs",
+    label: "Audit logs",
+    href: "/dashboard/settings/audit-logs",
+    icon: Settings,
+    keywords: "settings activity history",
+  },
+  {
+    id: "nav-settings-security",
+    label: "Security",
+    href: "/dashboard/settings/security",
+    icon: Settings,
+    keywords: "settings password 2fa",
   },
 ];
 
@@ -106,9 +189,9 @@ export function CommandPalette({
   );
 
   const results = useMemo(() => {
-    const all = [...NAV_COMMANDS, ...monitorCommands];
     const q = query.trim().toLowerCase();
-    if (!q) return NAV_COMMANDS;
+    if (!q) return TOP_LEVEL_COMMANDS;
+    const all = [...TOP_LEVEL_COMMANDS, ...SETTINGS_COMMANDS, ...monitorCommands];
     return all.filter((c) =>
       `${c.label} ${c.sublabel ?? ""} ${c.keywords ?? ""}`.toLowerCase().includes(q),
     );
