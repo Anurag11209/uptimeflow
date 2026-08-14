@@ -290,8 +290,11 @@ export function CommandPalette({
   );
 }
 
-/** Small trigger button for the header — shows the shortcut hint. */
+/** Small trigger button for the header — shows the shortcut hint, adapted to
+ * the person's actual platform (⌘K on Mac, Ctrl+K everywhere else — most
+ * people on Windows/Linux won't recognize the ⌘ glyph). */
 export function CommandPaletteTrigger({ onClick }: { onClick: () => void }) {
+  const shortcutLabel = usePlatformShortcutLabel();
   return (
     <button
       type="button"
@@ -301,8 +304,25 @@ export function CommandPaletteTrigger({ onClick }: { onClick: () => void }) {
       <Search className="size-3.5" />
       Search
       <kbd className="rounded border border-line-soft px-1 font-[family-name:var(--font-mono)] text-[10px]">
-        ⌘K
+        {shortcutLabel}
       </kbd>
     </button>
   );
+}
+
+/** Detects Mac vs. other platforms client-side to label the shortcut
+ * correctly. Defaults to "Ctrl+K" during SSR/before hydration since that's
+ * the more universally recognizable label if we have to guess. */
+function usePlatformShortcutLabel(): string {
+  const [label, setLabel] = useState("Ctrl+K");
+
+  useEffect(() => {
+    const platform =
+      (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
+        ?.platform ?? navigator.platform;
+    const isMac = /Mac|iPhone|iPad|iPod/i.test(platform);
+    setLabel(isMac ? "⌘K" : "Ctrl+K");
+  }, []);
+
+  return label;
 }
