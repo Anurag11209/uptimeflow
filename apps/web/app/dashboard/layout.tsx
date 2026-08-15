@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -48,6 +48,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [hydrated, setHydrated] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const mobileDrawerRef = useRef<HTMLElement>(null);
 
   // Close mobile drawer on route change
   useEffect(() => {
@@ -60,6 +61,45 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") setMobileNavOpen(false);
     }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [mobileNavOpen]);
+
+  // Trap Tab focus inside the drawer while it's open, and move focus into it
+  // on open so keyboard users land somewhere sensible instead of on the page
+  // content that's now hidden behind the backdrop.
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const panel = mobileDrawerRef.current;
+    if (!panel) return;
+
+    function getFocusable(): HTMLElement[] {
+      if (!panel) return [];
+      return Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => el.offsetParent !== null);
+    }
+
+    const focusable = getFocusable();
+    (focusable[0] ?? panel).focus();
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Tab") return;
+      const items = getFocusable();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    }
+
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [mobileNavOpen]);
@@ -166,10 +206,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             aria-hidden="true"
           >
             <aside
+              ref={mobileDrawerRef}
               role="dialog"
               aria-modal="true"
               aria-label="Mobile navigation"
-              className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col gap-1 border-r border-line-soft bg-panel p-4 shadow-2xl"
+              tabIndex={-1}
+              className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col gap-1 border-r border-line-soft bg-panel p-4 shadow-2xl focus:outline-none"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mb-4 flex items-center justify-between border-b border-line-soft pb-3">
