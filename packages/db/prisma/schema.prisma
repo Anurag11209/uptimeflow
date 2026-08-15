@@ -127,10 +127,11 @@ model Verification {
 }
 
 model TwoFactor {
-  id          String @id
+  id          String  @id
   secret      String
   backupCodes String
-  userId      String @unique
+  userId      String  @unique
+  verified    Boolean @default(false)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
