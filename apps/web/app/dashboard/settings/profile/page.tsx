@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
@@ -103,8 +104,8 @@ export default function ProfilePage() {
   async function onChangePassword(e: FormEvent) {
     e.preventDefault();
     setPasswordError(null);
-    if (newPassword.length < 8) {
-      setPasswordError("New password must be at least 8 characters.");
+    if (newPassword.length < 12) {
+      setPasswordError("New password must be at least 12 characters.");
       return;
     }
     setSavingPassword(true);
@@ -158,11 +159,23 @@ export default function ProfilePage() {
               )}
             </span>
             <Field label="Avatar URL" htmlFor="image" hint="Link to an image (PNG, JPG, or SVG).">
-              <Input id="image" value={image} onChange={(e) => setImage(e.target.value)} placeholder="https://…" />
+              <Input
+                id="image"
+                name="image"
+                value={image}
+                onChange={(e) => setImage(e.target.value)}
+                placeholder="https://…"
+              />
             </Field>
           </div>
           <Field label="Name" htmlFor="name">
-            <Input id="name" value={name} onChange={(e) => setName(e.target.value)} />
+            <Input
+              id="name"
+              name="name"
+              autoComplete="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
           </Field>
           <div className="flex justify-end">
             <Button type="submit" loading={savingProfile}>Save profile</Button>
@@ -181,7 +194,15 @@ export default function ProfilePage() {
             </div>
           </Field>
           <Field label="New email" htmlFor="new-email" hint="We'll send a confirmation link to the new address.">
-            <Input id="new-email" type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="you@acme.com" />
+            <Input
+              id="new-email"
+              name="newEmail"
+              type="email"
+              autoComplete="email"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              placeholder="you@acme.com"
+            />
           </Field>
           <div className="flex justify-end">
             <Button type="submit" variant="secondary" loading={savingEmail} disabled={!newEmail.trim()}>
@@ -195,15 +216,29 @@ export default function ProfilePage() {
         <Section title="Password">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Current password" htmlFor="current-password">
-              <Input id="current-password" type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} autoComplete="current-password" />
+              <PasswordInput
+                id="current-password"
+                name="currentPassword"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                autoComplete="current-password"
+              />
             </Field>
-            <Field label="New password" htmlFor="new-password" hint="At least 8 characters.">
-              <Input id="new-password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" />
+            <Field label="New password" htmlFor="new-password" hint="At least 12 characters.">
+              <PasswordInput
+                id="new-password"
+                name="newPassword"
+                minLength={12}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password"
+              />
             </Field>
           </div>
           <label className="flex items-center gap-2 text-sm text-text">
             <input
               type="checkbox"
+              name="revokeOthers"
               checked={revokeOthers}
               onChange={(e) => setRevokeOthers(e.target.checked)}
               className="size-4 rounded border-line bg-panel-2 accent-brand"

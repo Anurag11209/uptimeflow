@@ -412,7 +412,7 @@ export default function AlertChannelsPage() {
                       </td>
                       <td className="px-4 py-3 text-muted">{formatDateTime(channel.updatedAt)}</td>
                       <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+                        <div className="flex items-center justify-end gap-1.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
                           {canUpdate && canTestChannel(channel.type) && (
                             <Button
                               variant="ghost"

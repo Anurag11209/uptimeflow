@@ -220,11 +220,13 @@ export function CommandPalette({
     }
   }
 
+  const activeItemId = results[activeIndex] ? `cmd-item-${results[activeIndex].id}` : undefined;
+
   if (!open) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-ink/70 p-4 pt-[15vh] backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-ink/70 p-4 pt-[10vh] sm:pt-[15vh] backdrop-blur-sm"
       onClick={() => onOpenChange(false)}
     >
       <div
@@ -235,41 +237,68 @@ export function CommandPalette({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2.5 border-b border-line-soft px-4 py-3">
-          <Search className="size-4 shrink-0 text-muted" />
+          <Search className="size-4 shrink-0 text-muted" aria-hidden />
           <input
             ref={inputRef}
+            role="combobox"
+            aria-expanded="true"
+            aria-autocomplete="list"
+            aria-controls="command-palette-results"
+            aria-activedescendant={activeItemId}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="Search monitors or jump to a page…"
             className="w-full bg-transparent text-sm text-text placeholder:text-muted focus:outline-none"
           />
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            aria-label="Close command palette"
+            className="rounded p-1 text-muted transition-colors hover:bg-panel-2 hover:text-text sm:hidden"
+          >
+            <span className="text-xs">Done</span>
+          </button>
           <kbd className="hidden shrink-0 rounded border border-line-soft px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[10px] text-muted sm:inline">
             Esc
           </kbd>
         </div>
 
-        <ul className="max-h-80 overflow-y-auto p-1.5">
+        <ul
+          id="command-palette-results"
+          role="listbox"
+          aria-label="Commands"
+          className="max-h-80 overflow-y-auto p-1.5"
+        >
           {results.length === 0 ? (
-            <li className="px-3 py-6 text-center text-sm text-muted">No matches.</li>
+            <li role="presentation" className="px-3 py-6 text-center text-sm text-muted">
+              No matches found.
+            </li>
           ) : (
             results.map((c, i) => {
               const Icon = c.icon;
               const monitor = c.id.startsWith("monitor-")
                 ? monitorPage?.items.find((m) => `monitor-${m.id}` === c.id)
                 : undefined;
+              const isSelected = i === activeIndex;
               return (
-                <li key={c.id}>
+                <li
+                  key={c.id}
+                  id={`cmd-item-${c.id}`}
+                  role="option"
+                  aria-selected={isSelected}
+                >
                   <button
                     type="button"
+                    tabIndex={-1}
                     onMouseEnter={() => setActiveIndex(i)}
                     onClick={() => go(c)}
                     className={cn(
                       "flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors",
-                      i === activeIndex ? "bg-panel-2 text-text" : "text-muted hover:text-text",
+                      isSelected ? "bg-panel-2 text-text font-medium" : "text-muted hover:text-text",
                     )}
                   >
-                    <Icon className="size-4 shrink-0" />
+                    <Icon className="size-4 shrink-0" aria-hidden />
                     <span className="min-w-0 flex-1 truncate">
                       {c.label}
                       {c.sublabel ? (

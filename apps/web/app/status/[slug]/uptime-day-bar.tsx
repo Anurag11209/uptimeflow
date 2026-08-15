@@ -11,42 +11,48 @@ interface UptimeDayBarProps {
 }
 
 /**
- * Row of daily uptime bars with a hover tooltip, modeled on OpenStatus's
- * status-bar pattern: thin flex-1 bars, gap-px, taller on hover.
+ * Row of daily uptime bars with touch and keyboard accessible inspection.
+ * Supports hover, touch tap, and keyboard focus.
  */
 export function UptimeDayBar({ name, overallLabel, days }: UptimeDayBarProps) {
   const uid = useId();
-  const [hovered, setHovered] = useState<number | null>(null);
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
 
   return (
     <div
       className="flex h-8 items-end gap-px"
-      role="img"
+      role="group"
       aria-label={`${name} ${overallLabel} uptime`}
     >
       {days.map((d, i) => {
-        const isHovered = hovered === i;
+        const isActive = activeIdx === i;
+        const dayFormatted = formatDay(d.day);
+        const uptimeFormatted = formatUptime(d.uptimePct);
+
         return (
           <div key={`${uid}-${d.day}`} className="relative flex h-full flex-1 items-end">
             <button
               type="button"
-              tabIndex={-1}
-              aria-hidden
-              onMouseEnter={() => setHovered(i)}
-              onMouseLeave={() => setHovered((h) => (h === i ? null : h))}
+              aria-label={`${dayFormatted}: ${uptimeFormatted} uptime`}
+              onMouseEnter={() => setActiveIdx(i)}
+              onMouseLeave={() => setActiveIdx((curr) => (curr === i ? null : curr))}
+              onFocus={() => setActiveIdx(i)}
+              onBlur={() => setActiveIdx((curr) => (curr === i ? null : curr))}
+              onClick={() => setActiveIdx((curr) => (curr === i ? null : i))}
               className={cn(
-                "h-full w-full min-w-[2px] rounded-[1px] transition-transform duration-100",
+                "h-full w-full min-w-[2px] rounded-[1px] transition-all duration-100",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand",
                 uptimeBarColor(d.uptimePct),
-                isHovered && "scale-y-105",
+                isActive && "scale-y-110 brightness-110",
               )}
             />
-            {isHovered ? (
+            {isActive ? (
               <div
                 className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-max -translate-x-1/2 rounded-md border border-line bg-panel-2 px-2.5 py-1.5 text-xs shadow-lg"
                 role="tooltip"
               >
-                <p className="font-medium text-text">{formatDay(d.day)}</p>
-                <p className="text-muted">{formatUptime(d.uptimePct)} uptime</p>
+                <p className="font-medium text-text">{dayFormatted}</p>
+                <p className="text-muted">{uptimeFormatted} uptime</p>
               </div>
             ) : null}
           </div>

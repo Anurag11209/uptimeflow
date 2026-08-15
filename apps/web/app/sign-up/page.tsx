@@ -7,6 +7,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordInput } from "@/components/ui/password-input";
 import { authClient } from "@/lib/auth-client";
 
 export default function SignUpPage() {
@@ -84,6 +85,7 @@ export default function SignUpPage() {
           <Label htmlFor="name">Full name</Label>
           <Input
             id="name"
+            name="name"
             autoComplete="name"
             required
             value={name}
@@ -96,8 +98,9 @@ export default function SignUpPage() {
           <Label htmlFor="email">Work email</Label>
           <Input
             id="email"
+            name="email"
             type="email"
-            autoComplete="email"
+            autoComplete="username"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -107,9 +110,9 @@ export default function SignUpPage() {
 
         <div className="space-y-2">
           <Label htmlFor="password">Password</Label>
-          <Input
+          <PasswordInput
             id="password"
-            type="password"
+            name="password"
             autoComplete="new-password"
             required
             minLength={12}

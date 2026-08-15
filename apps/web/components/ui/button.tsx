@@ -44,12 +44,13 @@ export function buttonClasses(
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   function Button(
-    { className, variant = "primary", size = "md", loading, disabled, children, ...props },
+    { className, variant = "primary", size = "md", loading, disabled, type = "button", children, ...props },
     ref,
   ) {
     return (
       <button
         ref={ref}
+        type={type}
         disabled={disabled || loading}
         className={buttonClasses(variant, size, className)}
         {...props}

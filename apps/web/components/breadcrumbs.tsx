@@ -57,21 +57,23 @@ export function Breadcrumbs() {
   });
 
   return (
-    <nav aria-label="Breadcrumb" className="mb-4 flex items-center gap-1.5 text-sm text-muted">
-      {crumbs.map((c) => (
-        <span key={c.href} className="flex items-center gap-1.5">
-          {c.isLast ? (
-            <span className="max-w-[16rem] truncate text-text" aria-current="page">
-              {c.label}
-            </span>
-          ) : (
-            <Link href={c.href} className="truncate hover:text-brand">
-              {c.label}
-            </Link>
-          )}
-          {!c.isLast ? <ChevronRight className="size-3.5 shrink-0 text-muted/60" /> : null}
-        </span>
-      ))}
+    <nav aria-label="Breadcrumb" className="mb-4 text-sm text-muted">
+      <ol className="flex flex-wrap items-center gap-1.5 list-none p-0 m-0">
+        {crumbs.map((c) => (
+          <li key={c.href} className="inline-flex items-center gap-1.5">
+            {c.isLast ? (
+              <span className="max-w-[16rem] truncate font-medium text-text" aria-current="page">
+                {c.label}
+              </span>
+            ) : (
+              <Link href={c.href} className="truncate transition-colors hover:text-brand">
+                {c.label}
+              </Link>
+            )}
+            {!c.isLast ? <ChevronRight className="size-3.5 shrink-0 text-muted/60" aria-hidden /> : null}
+          </li>
+        ))}
+      </ol>
     </nav>
   );
 }

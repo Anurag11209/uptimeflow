@@ -5,6 +5,8 @@ import { AlertTriangle, Mail, ScrollText, Users } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { HealthBadge } from "@/components/monitors/health-badge";
 import { HeartbeatStrip } from "@/components/monitors/heartbeat-strip";
+import { LiveRefreshIndicator } from "@/components/dashboard/live-refresh-indicator";
+import { OnboardingChecklist } from "@/components/dashboard/onboarding-checklist";
 import { hasPermission } from "@backend-uptime/shared";
 import { useActiveOrg, useAuditLogs, useOverview } from "@/lib/queries";
 import { monitorTarget, useMonitors } from "@/lib/monitors";
@@ -55,6 +57,7 @@ export default function DashboardOverviewPage() {
 
   const { data: overview, isPending: overviewPending } = useOverview(orgId);
   const canReadMonitors = role ? hasPermission(role, "monitor", ["read"]) : false;
+  const canManage = role ? hasPermission(role, "monitor", ["create", "update", "delete"]) : false;
   const { data: monitorPage, isPending: monitorsPending } = useMonitors(orgId, canReadMonitors);
 
   const canReadAudit = role ? hasPermission(role, "auditLog", ["read"]) : false;
@@ -79,12 +82,21 @@ export default function DashboardOverviewPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="font-[family-name:var(--font-display)] text-2xl font-semibold tracking-tight">
-          {overview?.organization.name ?? "Overview"}
-        </h1>
-        <p className="mt-1 text-sm text-muted">Operational snapshot for your organization.</p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="font-[family-name:var(--font-display)] text-2xl font-semibold tracking-tight">
+            {overview?.organization.name ?? "Overview"}
+          </h1>
+          <p className="mt-1 text-sm text-muted">
+            Operational snapshot for your organization.
+          </p>
+        </div>
+
+        <LiveRefreshIndicator intervalSeconds={30} orgId={orgId} />
       </div>
+
+      {/* Interactive quick-start guide for new orgs; hides itself once every step is done. */}
+      <OnboardingChecklist orgId={orgId} canManage={canManage} />
 
       {/* Hero: the thing you actually opened this page to check. */}
       <section
