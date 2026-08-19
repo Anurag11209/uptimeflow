@@ -14,6 +14,7 @@ import { SubscribersTab } from "@/components/status-pages/subscribers-tab";
 import { ApiError } from "@/lib/api";
 import { useActiveOrg } from "@/lib/queries";
 import { useStatusPage, visibilityMeta } from "@/lib/status-pages";
+import { useSetBreadcrumbLabel } from "@/components/breadcrumb-context";
 import { cn } from "@/lib/utils";
 import { hasPermission } from "@backend-uptime/shared";
 
@@ -40,6 +41,7 @@ export default function StatusPageDetail({ params }: { params: Promise<{ id: str
     : false;
 
   const { data: page, isPending, error } = useStatusPage(orgId, id, canRead);
+  useSetBreadcrumbLabel(id, page?.name);
   const [tab, setTab] = useState<Tab>("Overview");
 
   if (orgPending || (isPending && canRead)) {

@@ -6,9 +6,12 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { RoleBadge } from "@/components/role-badge";
+import { useToast } from "@/components/ui/toast";
 import { authClient } from "@/lib/auth-client";
 import {
   useActiveOrg,
@@ -23,11 +26,30 @@ import {
   type OrgRole,
 } from "@backend-uptime/shared";
 
+interface MemberItem {
+  id: string;
+  role: string;
+  user: {
+    id: string;
+    name: string;
+    email: string;
+  };
+}
+
+interface InvitationItem {
+  id: string;
+  email: string;
+  role: string | null;
+  status: string;
+  expiresAt: string;
+}
+
 export default function MembersPage() {
   const { data: activeOrg, me, isPending: orgPending } = useActiveOrg();
   const orgId = activeOrg?.organization.id;
   const role = activeOrg?.role;
   const invalidateOrg = useInvalidateOrg();
+  const { toast } = useToast();
 
   const canReadMembers = role ? hasPermission(role, "member", ["read"]) : false;
   const canManageMembers = role
@@ -48,9 +70,13 @@ export default function MembersPage() {
   const [email, setEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<OrgRole>("viewer");
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  // Destructive action state
+  const [memberToRemove, setMemberToRemove] = useState<MemberItem | null>(null);
+  const [invitationToCancel, setInvitationToCancel] = useState<InvitationItem | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
   if (orgPending) {
     return <div className="h-64 animate-pulse rounded-lg bg-panel" />;
@@ -68,7 +94,6 @@ export default function MembersPage() {
   async function invite(event: FormEvent) {
     event.preventDefault();
     setError(null);
-    setNotice(null);
     setPending(true);
 
     const { error: inviteError } = await authClient.organization.inviteMember({
@@ -83,7 +108,7 @@ export default function MembersPage() {
       return;
     }
 
-    setNotice(`Invitation sent to ${email}.`);
+    toast(`Invitation sent to ${email}.`, "success");
     setEmail("");
     setInviteRole("viewer");
     if (orgId) invalidateOrg(orgId);
@@ -100,40 +125,43 @@ export default function MembersPage() {
     });
     setBusyId(null);
     if (roleError) {
-      setError(roleError.message ?? "Could not update the role.");
+      toast(roleError.message ?? "Could not update role.", "error");
       return;
     }
+    toast("Member role updated.", "success");
     invalidateOrg(orgId);
   }
 
-  async function removeMember(memberId: string) {
-    if (!orgId) return;
-    setBusyId(memberId);
-    setError(null);
+  async function onConfirmRemoveMember() {
+    if (!orgId || !memberToRemove) return;
+    setActionLoading(true);
     const { error: removeError } = await authClient.organization.removeMember({
-      memberIdOrEmail: memberId,
+      memberIdOrEmail: memberToRemove.id,
       organizationId: orgId,
     });
-    setBusyId(null);
+    setActionLoading(false);
     if (removeError) {
-      setError(removeError.message ?? "Could not remove the member.");
+      toast(removeError.message ?? "Could not remove member.", "error");
       return;
     }
+    toast(`Removed ${memberToRemove.user.name} from the organization.`, "success");
+    setMemberToRemove(null);
     invalidateOrg(orgId);
   }
 
-  async function cancelInvitation(invitationId: string) {
-    if (!orgId) return;
-    setBusyId(invitationId);
-    await authClient.organization.cancelInvitation({ invitationId });
-    setBusyId(null);
+  async function onConfirmCancelInvitation() {
+    if (!orgId || !invitationToCancel) return;
+    setActionLoading(true);
+    await authClient.organization.cancelInvitation({ invitationId: invitationToCancel.id });
+    setActionLoading(false);
+    toast(`Cancelled invitation for ${invitationToCancel.email}.`, "success");
+    setInvitationToCancel(null);
     invalidateOrg(orgId);
   }
 
   async function resendInvitation(inv: { id: string; email: string; role: string | null }) {
     if (!orgId) return;
     setBusyId(inv.id);
-    // Better Auth re-sends and refreshes the expiry when resend is set.
     const { error: resendError } = await authClient.organization.inviteMember({
       email: inv.email,
       role: (inv.role ?? "viewer") as OrgRole,
@@ -141,8 +169,11 @@ export default function MembersPage() {
       resend: true,
     });
     setBusyId(null);
-    setNotice(resendError ? null : `Invitation re-sent to ${inv.email}.`);
-    if (resendError) setError(resendError.message ?? "Could not resend the invitation.");
+    if (resendError) {
+      toast(resendError.message ?? "Could not resend invitation.", "error");
+    } else {
+      toast(`Invitation re-sent to ${inv.email}.`, "success");
+    }
     invalidateOrg(orgId);
   }
 
@@ -158,7 +189,6 @@ export default function MembersPage() {
       </div>
 
       {error ? <Alert tone="error">{error}</Alert> : null}
-      {notice ? <Alert tone="success">{notice}</Alert> : null}
 
       {canManageMembers ? (
         <Card>
@@ -176,6 +206,7 @@ export default function MembersPage() {
               <Label htmlFor="invite-email">Email</Label>
               <Input
                 id="invite-email"
+                name="email"
                 type="email"
                 required
                 value={email}
@@ -185,11 +216,11 @@ export default function MembersPage() {
             </div>
             <div className="space-y-2 sm:w-48">
               <Label htmlFor="invite-role">Role</Label>
-              <select
+              <Select
                 id="invite-role"
+                name="role"
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value as OrgRole)}
-                className="h-10 w-full rounded-md border border-line bg-panel-2 px-3 text-sm text-text focus-visible:border-brand/70 focus-visible:outline-none"
               >
                 {assignable
                   .filter((r) => r !== "owner")
@@ -198,7 +229,7 @@ export default function MembersPage() {
                       {ROLE_LABELS[r]}
                     </option>
                   ))}
-              </select>
+              </Select>
             </div>
             <Button type="submit" loading={pending}>
               Send invite
@@ -242,32 +273,36 @@ export default function MembersPage() {
                   </div>
 
                   <div className="flex items-center gap-3">
-                    {canManageMembers && member.role !== "owner" ? (
-                      <select
-                        value={member.role}
-                        disabled={busyId === member.id}
-                        onChange={(e) => changeRole(member.id, e.target.value)}
-                        className="h-8 rounded-md border border-line bg-panel-2 px-2 text-xs text-text focus-visible:border-brand/70 focus-visible:outline-none disabled:opacity-50"
-                      >
-                        {assignable.map((r) => (
-                          <option key={r} value={r}>
-                            {ROLE_LABELS[r]}
-                          </option>
-                        ))}
-                      </select>
+                    {canEditThis ? (
+                      <div className="w-36">
+                        <Select
+                          value={member.role}
+                          disabled={busyId === member.id}
+                          onChange={(e) => changeRole(member.id, e.target.value)}
+                          className="h-8 text-xs"
+                          aria-label={`Change role for ${member.user.name}`}
+                        >
+                          {assignable.map((r) => (
+                            <option key={r} value={r}>
+                              {ROLE_LABELS[r]}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
                     ) : (
                       <RoleBadge role={member.role} />
                     )}
 
-                    {canManageMembers && member.role !== "owner" ? (
-                      <button
-                        onClick={() => removeMember(member.id)}
+                    {canEditThis ? (
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        onClick={() => setMemberToRemove(member)}
                         disabled={busyId === member.id}
-                        title="Remove member"
-                        className="rounded-md p-1.5 text-muted transition-colors hover:bg-down/10 hover:text-down disabled:opacity-50"
+                        aria-label={`Remove ${member.user.name}`}
                       >
-                        <Trash2 className="size-4" />
-                      </button>
+                        <Trash2 className="size-3.5" />
+                      </Button>
                     ) : null}
                   </div>
                 </li>
@@ -304,26 +339,59 @@ export default function MembersPage() {
                 <div className="flex items-center gap-3">
                   {inv.role ? <RoleBadge role={inv.role} /> : null}
                   <Badge tone="muted">{inv.status}</Badge>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => resendInvitation(inv)}
                     disabled={busyId === inv.id}
-                    className="text-xs text-muted hover:text-brand disabled:opacity-50"
                   >
                     Resend
-                  </button>
-                  <button
-                    onClick={() => cancelInvitation(inv.id)}
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => setInvitationToCancel(inv)}
                     disabled={busyId === inv.id}
-                    className="text-xs text-muted hover:text-down disabled:opacity-50"
                   >
                     Cancel
-                  </button>
+                  </Button>
                 </div>
               </li>
             ))}
           </ul>
         </Card>
       ) : null}
+
+      {/* Confirmation Modals */}
+      <ConfirmDialog
+        open={Boolean(memberToRemove)}
+        title="Remove member?"
+        description={
+          memberToRemove
+            ? `Are you sure you want to remove ${memberToRemove.user.name} (${memberToRemove.user.email}) from ${activeOrg?.organization.name}? They will lose all access immediately.`
+            : undefined
+        }
+        confirmLabel="Remove member"
+        tone="danger"
+        loading={actionLoading}
+        onConfirm={onConfirmRemoveMember}
+        onCancel={() => setMemberToRemove(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(invitationToCancel)}
+        title="Cancel invitation?"
+        description={
+          invitationToCancel
+            ? `Cancel the pending invitation for ${invitationToCancel.email}? The invitation link will no longer work.`
+            : undefined
+        }
+        confirmLabel="Cancel invitation"
+        tone="danger"
+        loading={actionLoading}
+        onConfirm={onConfirmCancelInvitation}
+        onCancel={() => setInvitationToCancel(null)}
+      />
     </div>
   );
 }

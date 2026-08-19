@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { HealthBadge } from "@/components/monitors/health-badge";
+import { useSetBreadcrumbLabel } from "@/components/breadcrumb-context";
 import { LineChart } from "@/components/charts/line-chart";
 import { AvailabilityChart } from "@/components/charts/availability-chart";
 import { UptimeBars, type UptimeCell } from "@/components/charts/uptime-bars";
@@ -53,11 +54,10 @@ export default function MonitorDetailPage() {
   const orgId = activeOrg?.organization.id;
   const role = activeOrg?.role;
   const canRead = role ? hasPermission(role, "monitor", ["read"]) : false;
-  const canManage = role
-    ? hasPermission(role, "monitor", ["create", "update", "delete"])
-    : false;
+  const canManage = role ? hasPermission(role, "monitor", ["create", "update", "delete"]) : false;
 
   const monitor = useMonitor(orgId, canRead ? id : undefined);
+  useSetBreadcrumbLabel(id, monitor.data?.name);
   const checks = useCheckResults(orgId, canRead ? id : undefined, 100);
   const windows = useMonitorMaintenanceWindows(orgId, canRead ? id : undefined);
   const incidents = useMonitorIncidents(orgId, canRead ? id : undefined);
@@ -70,9 +70,7 @@ export default function MonitorDetailPage() {
 
   if (orgPending) return <DetailSkeleton />;
   if (!canRead) {
-    return (
-      <Alert tone="warning">You do not have permission to view monitors.</Alert>
-    );
+    return <Alert tone="warning">You do not have permission to view monitors.</Alert>;
   }
   if (monitor.isPending) return <DetailSkeleton />;
   if (monitor.error || !monitor.data) {
@@ -80,9 +78,7 @@ export default function MonitorDetailPage() {
       <div className="flex flex-col gap-4">
         <BackLink />
         <Alert tone="error">
-          {monitor.error instanceof ApiError
-            ? monitor.error.message
-            : "Monitor not found."}
+          {monitor.error instanceof ApiError ? monitor.error.message : "Monitor not found."}
         </Alert>
       </div>
     );
@@ -94,9 +90,7 @@ export default function MonitorDetailPage() {
   const dailyAvailability = toDailyAvailability(checkItems);
   const uptime = uptimePercent(checkItems);
   const avgLatency = averageLatency(checkItems);
-  const channelMap = new Map(
-    (channels.data?.items ?? []).map((c) => [c.id, c]),
-  );
+  const channelMap = new Map((channels.data?.items ?? []).map((c) => [c.id, c]));
 
   // Newest-last bars for the availability strip.
   const cells: UptimeCell[] = [...checkItems]
@@ -104,9 +98,7 @@ export default function MonitorDetailPage() {
     .slice(-40)
     .map((c) => ({
       status: c.status,
-      title: `${checkStatusMeta(c.status).label} · ${new Date(
-        c.checkedAt,
-      ).toLocaleString()}`,
+      title: `${checkStatusMeta(c.status).label} · ${new Date(c.checkedAt).toLocaleString()}`,
     }));
 
   async function onToggle() {
@@ -115,10 +107,7 @@ export default function MonitorDetailPage() {
       await toggleState.mutateAsync({ id: m.id, action });
       toast(action === "pause" ? "Monitor paused." : "Monitor resumed.", "success");
     } catch (err) {
-      toast(
-        err instanceof ApiError ? err.message : "Could not update monitor.",
-        "error",
-      );
+      toast(err instanceof ApiError ? err.message : "Could not update monitor.", "error");
     }
   }
 
@@ -128,10 +117,7 @@ export default function MonitorDetailPage() {
       toast("Monitor deleted.", "success");
       router.push("/dashboard/monitors");
     } catch (err) {
-      toast(
-        err instanceof ApiError ? err.message : "Could not delete monitor.",
-        "error",
-      );
+      toast(err instanceof ApiError ? err.message : "Could not delete monitor.", "error");
     }
   }
 
@@ -153,11 +139,7 @@ export default function MonitorDetailPage() {
         </div>
         {canManage ? (
           <div className="flex shrink-0 gap-2">
-            <ButtonLink
-              href={`/dashboard/monitors/${m.id}/edit`}
-              variant="secondary"
-              size="sm"
-            >
+            <ButtonLink href={`/dashboard/monitors/${m.id}/edit`} variant="secondary" size="sm">
               <Pencil className="size-3.5" /> Edit
             </ButtonLink>
             <Button variant="secondary" size="sm" onClick={onToggle}>
@@ -171,11 +153,7 @@ export default function MonitorDetailPage() {
                 </>
               )}
             </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              onClick={() => setConfirmDelete(true)}
-            >
+            <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)}>
               <Trash2 className="size-3.5" /> Delete
             </Button>
           </div>
@@ -197,10 +175,7 @@ export default function MonitorDetailPage() {
           value={m.lastStatusCode !== null ? String(m.lastStatusCode) : "—"}
         />
         <Stat label="SSL verification" value={m.verifySsl ? "On" : "Off"} />
-        <Stat
-          label="Created"
-          value={new Date(m.createdAt).toLocaleDateString()}
-        />
+        <Stat label="Created" value={new Date(m.createdAt).toLocaleDateString()} />
       </section>
 
       {m.lastError ? (
@@ -216,9 +191,7 @@ export default function MonitorDetailPage() {
           right={
             <span className="text-xs text-muted">
               {checkItems.length} checks · regions{" "}
-              {m.regions.length
-                ? m.regions.map(regionLabel).join(", ")
-                : "default"}
+              {m.regions.length ? m.regions.map(regionLabel).join(", ") : "default"}
             </span>
           }
         />
@@ -284,12 +257,8 @@ export default function MonitorDetailPage() {
                       <td className="px-4 py-2.5">
                         <Badge tone={meta.tone}>{meta.label}</Badge>
                       </td>
-                      <td className="px-4 py-2.5 text-muted">
-                        {regionLabel(c.region)}
-                      </td>
-                      <td className="px-4 py-2.5 text-muted">
-                        {formatResponseMs(c.responseMs)}
-                      </td>
+                      <td className="px-4 py-2.5 text-muted">{regionLabel(c.region)}</td>
+                      <td className="px-4 py-2.5 text-muted">{formatResponseMs(c.responseMs)}</td>
                       <td className="max-w-xs truncate px-4 py-2.5 text-muted">
                         {c.errorMessage ?? "—"}
                       </td>
@@ -313,10 +282,7 @@ export default function MonitorDetailPage() {
               {m.boundChannelIds.map((cid) => {
                 const ch = channelMap.get(cid);
                 return (
-                  <li
-                    key={cid}
-                    className="flex items-center justify-between text-sm"
-                  >
+                  <li key={cid} className="flex items-center justify-between text-sm">
                     <span className="text-text">{ch?.name ?? cid}</span>
                     {ch ? <Badge tone="muted">{ch.type}</Badge> : null}
                   </li>
@@ -338,8 +304,7 @@ export default function MonitorDetailPage() {
                 <li key={w.id} className="flex flex-col gap-0.5 py-2.5">
                   <span className="text-sm font-medium text-text">{w.title}</span>
                   <span className="text-xs text-muted">
-                    {new Date(w.startsAt).toLocaleString()} →{" "}
-                    {new Date(w.endsAt).toLocaleString()}
+                    {new Date(w.startsAt).toLocaleString()} → {new Date(w.endsAt).toLocaleString()}
                   </span>
                 </li>
               ))}
@@ -360,10 +325,7 @@ export default function MonitorDetailPage() {
             {incidents.data!.items.map((inc) => {
               const meta = incidentStatusMeta(inc.status);
               return (
-                <li
-                  key={inc.id}
-                  className="flex items-center justify-between gap-3 py-2.5"
-                >
+                <li key={inc.id} className="flex items-center justify-between gap-3 py-2.5">
                   <div className="min-w-0">
                     <p className="truncate text-sm text-text">{inc.title}</p>
                     <p className="text-xs text-muted">
@@ -413,13 +375,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SectionHeading({
-  title,
-  right,
-}: {
-  title: string;
-  right?: ReactNode;
-}) {
+function SectionHeading({ title, right }: { title: string; right?: ReactNode }) {
   return (
     <div className="mb-4 flex items-center justify-between">
       <h2 className="font-[family-name:var(--font-display)] text-sm font-semibold text-text">

@@ -6,10 +6,14 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import { useToast } from "@/components/ui/toast";
 import { ApiError } from "@/lib/api";
 import { useActiveOrg } from "@/lib/queries";
+import { useStatusPages } from "@/lib/status-pages";
 import { hasPermission, isValidDomain } from "@backend-uptime/shared";
 import {
   addCustomDomain,
@@ -32,7 +36,9 @@ export default function CustomDomainsPage() {
   const canManage = role ? hasPermission(role, "statusPage", ["create", "update", "delete"]) : false;
 
   const domains = useCustomDomains(orgId, canRead);
+  const statusPagesQuery = useStatusPages(orgId, canRead);
   const invalidate = useInvalidateCustomDomains();
+  const { toast } = useToast();
 
   const [statusPageId, setStatusPageId] = useState("");
   const [domain, setDomain] = useState("");
@@ -40,6 +46,10 @@ export default function CustomDomainsPage() {
   const [upgradeNeeded, setUpgradeNeeded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<CustomDomain | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const statusPages = statusPagesQuery.data?.items ?? [];
 
   if (isPending) return <p className="text-sm text-muted">Loading…</p>;
   if (!canRead) return <Alert tone="warning">You do not have permission to view custom domains.</Alert>;
@@ -47,6 +57,10 @@ export default function CustomDomainsPage() {
   async function onAdd(e: FormEvent) {
     e.preventDefault();
     if (!orgId) return;
+    if (!statusPageId) {
+      setError("Please select a status page to bind to this domain.");
+      return;
+    }
     if (!isValidDomain(domain)) {
       setError("Enter a valid domain, e.g. status.acme.com.");
       return;
@@ -56,6 +70,7 @@ export default function CustomDomainsPage() {
     setUpgradeNeeded(false);
     try {
       await addCustomDomain(orgId, { statusPageId: statusPageId.trim(), domain: domain.trim() });
+      toast(`Custom domain "${domain.trim()}" added.`, "success");
       setDomain("");
       setStatusPageId("");
       invalidate(orgId);
@@ -76,18 +91,28 @@ export default function CustomDomainsPage() {
     setBusyId(id);
     try {
       await verifyCustomDomain(orgId, id);
+      toast("Verification check requested.", "info");
       invalidate(orgId);
-    } catch {
-      // verify never hard-fails; the row's lastCheckError surfaces the reason.
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Verification check failed.", "error");
     } finally {
       setBusyId(null);
     }
   }
 
-  async function onRemove(id: string) {
-    if (!orgId) return;
-    await removeCustomDomain(orgId, id).catch(() => {});
-    invalidate(orgId);
+  async function onConfirmRemove() {
+    if (!orgId || !toDelete) return;
+    setDeleting(true);
+    try {
+      await removeCustomDomain(orgId, toDelete.id);
+      toast(`Custom domain "${toDelete.domain}" removed.`, "success");
+      setToDelete(null);
+      invalidate(orgId);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Could not remove domain.", "error");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const items = domains.data?.items ?? [];
@@ -123,7 +148,7 @@ export default function CustomDomainsPage() {
                 canManage={canManage}
                 busy={busyId === d.id}
                 onVerify={() => onVerify(d.id)}
-                onRemove={() => onRemove(d.id)}
+                onRemove={() => setToDelete(d)}
               />
             ))}
           </ul>
@@ -134,11 +159,31 @@ export default function CustomDomainsPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="cd-domain">Domain</Label>
-                <Input id="cd-domain" value={domain} onChange={(e) => setDomain(e.target.value)} required placeholder="status.acme.com" />
+                <Input
+                  id="cd-domain"
+                  name="domain"
+                  value={domain}
+                  onChange={(e) => setDomain(e.target.value)}
+                  required
+                  placeholder="status.acme.com"
+                />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="cd-page">Status page ID</Label>
-                <Input id="cd-page" value={statusPageId} onChange={(e) => setStatusPageId(e.target.value)} required placeholder="UUID of the status page" />
+                <Label htmlFor="cd-page">Status page</Label>
+                <Select
+                  id="cd-page"
+                  name="statusPageId"
+                  value={statusPageId}
+                  onChange={(e) => setStatusPageId(e.target.value)}
+                  required
+                >
+                  <option value="">Select a status page…</option>
+                  {statusPages.map((sp) => (
+                    <option key={sp.id} value={sp.id}>
+                      {sp.name} ({sp.slug})
+                    </option>
+                  ))}
+                </Select>
               </div>
             </div>
             {error ? <Alert tone="error">{error}</Alert> : null}
@@ -150,6 +195,21 @@ export default function CustomDomainsPage() {
           </form>
         ) : null}
       </Card>
+
+      <ConfirmDialog
+        open={Boolean(toDelete)}
+        title="Remove custom domain?"
+        description={
+          toDelete
+            ? `Are you sure you want to remove "${toDelete.domain}"? DNS routing and SSL for this domain will be disabled.`
+            : undefined
+        }
+        confirmLabel="Remove domain"
+        tone="danger"
+        loading={deleting}
+        onConfirm={onConfirmRemove}
+        onCancel={() => setToDelete(null)}
+      />
     </div>
   );
 }
@@ -194,7 +254,7 @@ function DomainRow({
             <Button variant="secondary" size="sm" onClick={onVerify} loading={busy}>
               <RefreshCw className="size-3.5" /> Check now
             </Button>
-            <Button variant="danger" size="sm" onClick={onRemove} aria-label="Remove">
+            <Button variant="danger" size="sm" onClick={onRemove} aria-label={`Remove domain ${domain.domain}`}>
               <Trash2 className="size-3.5" />
             </Button>
           </div>

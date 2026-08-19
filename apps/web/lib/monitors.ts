@@ -100,6 +100,12 @@ export interface AssertionView {
   expected: string;
 }
 
+/** One point in a monitor's recent check history, oldest → newest. */
+export interface RecentCheckPoint {
+  status: CheckStatus;
+  checkedAt: string;
+}
+
 export interface MonitorListItem {
   id: string;
   name: string;
@@ -119,9 +125,11 @@ export interface MonitorListItem {
   escalationPolicyId: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Most recent checks, oldest → newest. Powers the list-view heartbeat strip. */
+  recentChecks: RecentCheckPoint[];
 }
 
-export interface MonitorDetail extends MonitorListItem {
+export interface MonitorDetail extends Omit<MonitorListItem, "recentChecks"> {
   httpMethod: HttpMethod | null;
   requestHeaders: Record<string, string> | null;
   requestBody: string | null;

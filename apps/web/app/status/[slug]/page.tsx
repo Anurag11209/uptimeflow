@@ -10,7 +10,6 @@ import {
   isAllOperational,
   overallHeadline,
   safeAccent,
-  uptimeBarColor,
   uptimeTone,
   type PublicStatusComponent,
   type PublicStatusIncident,
@@ -20,6 +19,7 @@ import {
 } from "@/lib/status";
 import { fetchStatusHistory, fetchStatusIncidents, fetchStatusPage } from "@/lib/status-api";
 import { SubscribeForm } from "./subscribe-form";
+import { UptimeDayBar } from "./uptime-day-bar";
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -66,7 +66,6 @@ export default async function StatusPage({ params }: PageProps) {
   const { slug } = await params;
   const page = await fetchStatusPage(slug);
   if (!page) notFound();
-
   // Supplementary data — degrade gracefully if these fail.
   const [history, incidents] = await Promise.all([
     fetchStatusHistory(slug).catch(() => null),
@@ -100,7 +99,9 @@ export default async function StatusPage({ params }: PageProps) {
       />
       <Hero page={page} overallUptime={history?.overallUptimePct ?? null} />
       <div className="mt-8 flex flex-col gap-8">
-        {activeIncidents.length > 0 ? <ActiveIncidents incidents={activeIncidents} tz={tz} /> : null}
+        {activeIncidents.length > 0 ? (
+          <ActiveIncidents incidents={activeIncidents} tz={tz} />
+        ) : null}
         {maintenance.length > 0 ? <MaintenanceSection incidents={maintenance} tz={tz} /> : null}
         <Components components={page.components} historyById={historyById} />
         {history ? <UptimeSection history={history} /> : null}
@@ -119,13 +120,21 @@ function Footer({ page, tz }: { page: PublicStatusPage; tz: string }) {
       {links.length > 0 ? (
         <div className="flex flex-wrap justify-center gap-4">
           {links.map((l) => (
-            <a key={l.url} href={l.url} target="_blank" rel="noreferrer" className="hover:text-brand">
+            <a
+              key={l.url}
+              href={l.url}
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-brand"
+            >
               {l.label}
             </a>
           ))}
         </div>
       ) : null}
-      {page.branding?.footerText ? <p className="text-text/80">{page.branding.footerText}</p> : null}
+      {page.branding?.footerText ? (
+        <p className="text-text/80">{page.branding.footerText}</p>
+      ) : null}
       <p>Powered by UptimeFlow · Updated {formatDateTime(page.updatedAt, tz)}</p>
     </footer>
   );
@@ -135,9 +144,9 @@ function Footer({ page, tz }: { page: PublicStatusPage; tz: string }) {
 
 function Hero({ page, overallUptime }: { page: PublicStatusPage; overallUptime: number | null }) {
   const ok = isAllOperational(page.overallStatus);
-  const meta = componentStatusMeta(page.overallStatus);
   return (
     <header>
+      <h1 className="sr-only">{page.name} status</h1>
       <div className="flex items-center gap-3 text-sm text-muted">
         {page.branding?.logoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -152,43 +161,56 @@ function Hero({ page, overallUptime }: { page: PublicStatusPage; overallUptime: 
           </span>
         )}
       </div>
-      <h1 className="mt-3 font-[family-name:var(--font-display)] text-2xl font-semibold text-text sm:text-3xl">
-        {page.description ?? `${page.name} status`}
-      </h1>
 
+      {/* Full-bleed banner, not a bordered card — this is the one thing a visitor
+          needs to register in half a second. */}
       <div
         className={cn(
-          "mt-6 flex items-center justify-between gap-4 rounded-lg border p-5",
-          ok ? "border-up/40 bg-up/5" : "border-warn/40 bg-warn/5",
+          "-mx-4 mt-6 flex flex-col items-center gap-2 px-4 py-10 text-center sm:-mx-0 sm:rounded-xl sm:py-12",
+          ok ? "bg-up/10" : "bg-warn/10",
         )}
       >
-        <div className="flex items-center gap-3">
-          <StatusDot status={page.overallStatus} pulse />
-          <p className="text-lg font-medium text-text">{overallHeadline(page.overallStatus)}</p>
-        </div>
-        <Badge tone={meta.tone}>{meta.label}</Badge>
+        <StatusDot status={page.overallStatus} pulse size="lg" />
+        <p className="mt-2 font-[family-name:var(--font-display)] text-xl font-semibold text-text sm:text-2xl">
+          {overallHeadline(page.overallStatus)}
+        </p>
+        {overallUptime !== null ? (
+          <p className="text-sm text-muted">
+            <span className={cn("font-semibold", toneText(uptimeTone(overallUptime)))}>
+              {formatUptime(overallUptime)}
+            </span>{" "}
+            uptime over the last 90 days
+          </p>
+        ) : null}
       </div>
 
-      {overallUptime !== null ? (
-        <p className="mt-3 text-sm text-muted">
-          <span className={cn("font-semibold", toneText(uptimeTone(overallUptime)))}>
-            {formatUptime(overallUptime)}
-          </span>{" "}
-          uptime over the last 90 days
-        </p>
-      ) : null}
+      {page.description ? <p className="mt-4 text-sm text-muted">{page.description}</p> : null}
     </header>
   );
 }
 
-function StatusDot({ status, pulse }: { status: PublicStatusComponent["status"]; pulse?: boolean }) {
+function StatusDot({
+  status,
+  pulse,
+  size = "sm",
+}: {
+  status: PublicStatusComponent["status"];
+  pulse?: boolean;
+  size?: "sm" | "lg";
+}) {
   const meta = componentStatusMeta(status);
+  const dim = size === "lg" ? "size-6" : "size-3";
   return (
-    <span className="relative inline-flex size-3" aria-hidden>
+    <span className={cn("relative inline-flex", dim)} aria-hidden>
       {pulse ? (
-        <span className={cn("absolute inline-flex size-full animate-ping rounded-full opacity-60", meta.dot)} />
+        <span
+          className={cn(
+            "absolute inline-flex size-full animate-ping rounded-full opacity-60",
+            meta.dot,
+          )}
+        />
       ) : null}
-      <span className={cn("relative inline-flex size-3 rounded-full", meta.dot)} />
+      <span className={cn("relative inline-flex rounded-full", dim, meta.dot)} />
     </span>
   );
 }
@@ -220,19 +242,29 @@ function Components({
           {groups.map(({ group, items }) => (
             <li key={group ?? "_"}>
               {group ? (
-                <p className="px-5 pt-4 text-xs font-semibold uppercase tracking-wide text-muted">{group}</p>
+                <p className="px-5 pt-4 text-xs font-semibold uppercase tracking-wide text-muted">
+                  {group}
+                </p>
               ) : null}
               <ul>
                 {items.map((c) => {
                   const meta = componentStatusMeta(c.status);
                   const uptime = historyById.get(c.id)?.uptimePct;
                   return (
-                    <li key={c.id} className="flex items-center justify-between gap-4 px-5 py-4">
+                    <li
+                      key={c.id}
+                      className={cn(
+                        "flex items-center justify-between gap-4 border-l-2 px-5 py-4",
+                        componentRowAccent(c.status),
+                      )}
+                    >
                       <div className="flex min-w-0 items-center gap-3">
                         <StatusDot status={c.status} />
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium text-text">{c.name}</p>
-                          {c.description ? <p className="truncate text-xs text-muted">{c.description}</p> : null}
+                          {c.description ? (
+                            <p className="truncate text-xs text-muted">{c.description}</p>
+                          ) : null}
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-3">
@@ -275,15 +307,7 @@ function UptimeSection({ history }: { history: StatusHistory }) {
                   {formatUptime(c.uptimePct)}
                 </span>
               </div>
-              <div className="flex h-8 items-stretch gap-px" role="img" aria-label={`${c.name} ${formatUptime(c.uptimePct)} uptime`}>
-                {c.days.map((d) => (
-                  <span
-                    key={d.day}
-                    title={`${d.day}: ${formatUptime(d.uptimePct)}`}
-                    className={cn("flex-1 rounded-[1px]", uptimeBarColor(d.uptimePct))}
-                  />
-                ))}
-              </div>
+              <UptimeDayBar name={c.name} overallLabel={formatUptime(c.uptimePct)} days={c.days} />
             </div>
           ))}
         </CardContent>
@@ -311,7 +335,10 @@ function ActiveIncidents({ incidents, tz }: { incidents: PublicStatusIncident[];
               <ol className="mt-3 flex flex-col gap-3 border-l border-line-soft pl-4">
                 {incident.updates.map((u, i) => (
                   <li key={i} className="relative">
-                    <span className="absolute -left-[21px] top-1 size-2 rounded-full bg-warn" aria-hidden />
+                    <span
+                      className="absolute -left-[21px] top-1 size-2 rounded-full bg-warn"
+                      aria-hidden
+                    />
                     <p className="text-xs font-medium text-muted">
                       {incidentStatusLabel(u.status)} · {formatDateTime(u.createdAt, tz)}
                     </p>
@@ -341,11 +368,16 @@ function MaintenanceSection({ incidents, tz }: { incidents: PublicStatusIncident
                 <h3 className="text-sm font-semibold text-text">{incident.title}</h3>
                 <Badge tone="muted">{incidentStatusLabel(incident.status)}</Badge>
               </div>
-              <p className="mt-1 text-xs text-muted">Starts {formatDateTime(incident.startedAt, tz)}</p>
+              <p className="mt-1 text-xs text-muted">
+                Starts {formatDateTime(incident.startedAt, tz)}
+              </p>
               <ol className="mt-3 flex flex-col gap-3 border-l border-line-soft pl-4">
                 {incident.updates.map((u, i) => (
                   <li key={i} className="relative">
-                    <span className="absolute -left-[21px] top-1 size-2 rounded-full bg-muted" aria-hidden />
+                    <span
+                      className="absolute -left-[21px] top-1 size-2 rounded-full bg-muted"
+                      aria-hidden
+                    />
                     <p className="text-xs font-medium text-muted">
                       {incidentStatusLabel(u.status)} · {formatDateTime(u.createdAt, tz)}
                     </p>
@@ -421,7 +453,28 @@ function groupComponents(
 }
 
 function toneText(tone: ReturnType<typeof uptimeTone>): string {
-  return tone === "up" ? "text-up" : tone === "down" ? "text-down" : tone === "brand" ? "text-warn" : "text-muted";
+  return tone === "up"
+    ? "text-up"
+    : tone === "down"
+      ? "text-down"
+      : tone === "brand"
+        ? "text-warn"
+        : "text-muted";
+}
+
+/** Subtle left-border accent so a component's health reads before the badge does. */
+function componentRowAccent(status: PublicStatusComponent["status"]): string {
+  switch (status) {
+    case "OPERATIONAL":
+      return "border-l-up/50";
+    case "MAJOR_OUTAGE":
+      return "border-l-down/70";
+    case "DEGRADED_PERFORMANCE":
+    case "PARTIAL_OUTAGE":
+      return "border-l-warn/60";
+    default:
+      return "border-l-transparent";
+  }
 }
 
 /** Format a timestamp in the page's configured timezone, falling back to UTC. */

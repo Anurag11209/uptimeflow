@@ -8,6 +8,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordInput } from "@/components/ui/password-input";
 import { authClient } from "@/lib/auth-client";
 
 export default function SignInPage() {
@@ -73,8 +74,9 @@ export default function SignInPage() {
           <Label htmlFor="email">Email</Label>
           <Input
             id="email"
+            name="email"
             type="email"
-            autoComplete="email"
+            autoComplete="username"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -92,9 +94,9 @@ export default function SignInPage() {
               Forgot password?
             </Link>
           </div>
-          <Input
+          <PasswordInput
             id="password"
-            type="password"
+            name="password"
             autoComplete="current-password"
             required
             value={password}
@@ -115,10 +117,10 @@ export default function SignInPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Button variant="secondary" onClick={() => onSocial("github")}>
+        <Button type="button" variant="secondary" onClick={() => onSocial("github")}>
           GitHub
         </Button>
-        <Button variant="secondary" onClick={() => onSocial("google")}>
+        <Button type="button" variant="secondary" onClick={() => onSocial("google")}>
           Google
         </Button>
       </div>

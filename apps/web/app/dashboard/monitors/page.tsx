@@ -2,16 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import {
-  Activity,
-  Eye,
-  Pause,
-  Pencil,
-  Play,
-  Plus,
-  Search,
-  Trash2,
-} from "lucide-react";
+import { Activity, Eye, Pause, Pencil, Play, Plus, Search, Trash2 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,10 +14,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { HealthBadge } from "@/components/monitors/health-badge";
+import { HeartbeatStrip } from "@/components/monitors/heartbeat-strip";
 import { ApiError } from "@/lib/api";
 import { useActiveOrg } from "@/lib/queries";
+import { cn } from "@/lib/utils";
 import {
-  formatInterval,
   formatRelativeTime,
   formatResponseMs,
   monitorTarget,
@@ -40,6 +32,20 @@ import {
 } from "@/lib/monitors";
 import { SUPPORTED_MONITOR_TYPES } from "@/lib/monitors";
 import { hasPermission } from "@backend-uptime/shared";
+
+/** Subtle left-border accent so row health reads before you even look at the badge. */
+function rowAccent(health: MonitorHealth): string {
+  switch (health) {
+    case "UP":
+      return "border-l-up/60";
+    case "DOWN":
+      return "border-l-down/70";
+    case "DEGRADED":
+      return "border-l-warn/60";
+    default:
+      return "border-l-transparent";
+  }
+}
 
 const PAGE_SIZE = 12;
 
@@ -59,9 +65,7 @@ export default function MonitorsPage() {
   const role = activeOrg?.role;
 
   const canRead = role ? hasPermission(role, "monitor", ["read"]) : false;
-  const canManage = role
-    ? hasPermission(role, "monitor", ["create", "update", "delete"])
-    : false;
+  const canManage = role ? hasPermission(role, "monitor", ["create", "update", "delete"]) : false;
 
   const { data, isPending, error } = useMonitors(orgId, canRead);
   const toggleState = useToggleMonitorState(orgId ?? "");
@@ -82,19 +86,13 @@ export default function MonitorsPage() {
       if (healthFilter !== "ALL" && m.health !== healthFilter) return false;
       if (typeFilter !== "ALL" && m.type !== typeFilter) return false;
       if (!q) return true;
-      return (
-        m.name.toLowerCase().includes(q) ||
-        monitorTarget(m).toLowerCase().includes(q)
-      );
+      return m.name.toLowerCase().includes(q) || monitorTarget(m).toLowerCase().includes(q);
     });
   }, [monitors, search, healthFilter, typeFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
-  const pageItems = filtered.slice(
-    safePage * PAGE_SIZE,
-    safePage * PAGE_SIZE + PAGE_SIZE,
-  );
+  const pageItems = filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
 
   function resetPage<T>(setter: (v: T) => void) {
     return (v: T) => {
@@ -107,15 +105,9 @@ export default function MonitorsPage() {
     const action = m.state === "PAUSED" ? "resume" : "pause";
     try {
       await toggleState.mutateAsync({ id: m.id, action });
-      toast(
-        action === "pause" ? "Monitor paused." : "Monitor resumed.",
-        "success",
-      );
+      toast(action === "pause" ? "Monitor paused." : "Monitor resumed.", "success");
     } catch (err) {
-      toast(
-        err instanceof ApiError ? err.message : "Could not update monitor.",
-        "error",
-      );
+      toast(err instanceof ApiError ? err.message : "Could not update monitor.", "error");
     }
   }
 
@@ -126,18 +118,13 @@ export default function MonitorsPage() {
       toast("Monitor deleted.", "success");
       setToDelete(null);
     } catch (err) {
-      toast(
-        err instanceof ApiError ? err.message : "Could not delete monitor.",
-        "error",
-      );
+      toast(err instanceof ApiError ? err.message : "Could not delete monitor.", "error");
     }
   }
 
   if (orgPending) return <ListSkeleton />;
   if (!canRead) {
-    return (
-      <Alert tone="warning">You do not have permission to view monitors.</Alert>
-    );
+    return <Alert tone="warning">You do not have permission to view monitors.</Alert>;
   }
 
   return (
@@ -172,9 +159,7 @@ export default function MonitorsPage() {
         <div className="w-44">
           <Select
             value={healthFilter}
-            onChange={(e) =>
-              resetPage(setHealthFilter)(e.target.value as MonitorHealth | "ALL")
-            }
+            onChange={(e) => resetPage(setHealthFilter)(e.target.value as MonitorHealth | "ALL")}
             aria-label="Filter by status"
           >
             {HEALTH_FILTERS.map((f) => (
@@ -187,9 +172,7 @@ export default function MonitorsPage() {
         <div className="w-44">
           <Select
             value={typeFilter}
-            onChange={(e) =>
-              resetPage(setTypeFilter)(e.target.value as MonitorType | "ALL")
-            }
+            onChange={(e) => resetPage(setTypeFilter)(e.target.value as MonitorType | "ALL")}
             aria-label="Filter by type"
           >
             <option value="ALL">All types</option>
@@ -211,9 +194,7 @@ export default function MonitorsPage() {
       ) : monitors.length === 0 ? (
         <EmptyState canManage={canManage} />
       ) : filtered.length === 0 ? (
-        <Card className="p-10 text-center text-sm text-muted">
-          No monitors match your filters.
-        </Card>
+        <Card className="p-10 text-center text-sm text-muted">No monitors match your filters.</Card>
       ) : (
         <>
           <Card className="overflow-hidden">
@@ -224,7 +205,7 @@ export default function MonitorsPage() {
                     <th className="px-4 py-3 font-medium">Status</th>
                     <th className="px-4 py-3 font-medium">Name</th>
                     <th className="px-4 py-3 font-medium">Type</th>
-                    <th className="px-4 py-3 font-medium">Interval</th>
+                    <th className="hidden px-4 py-3 font-medium lg:table-cell">History</th>
                     <th className="px-4 py-3 font-medium">Last check</th>
                     <th className="px-4 py-3 font-medium">Response</th>
                     <th className="px-4 py-3 text-right font-medium">Actions</th>
@@ -232,7 +213,10 @@ export default function MonitorsPage() {
                 </thead>
                 <tbody className="divide-y divide-line-soft">
                   {pageItems.map((m) => (
-                    <tr key={m.id} className="hover:bg-panel-2/50">
+                    <tr
+                      key={m.id}
+                      className={cn("border-l-2 hover:bg-panel-2/50", rowAccent(m.health))}
+                    >
                       <td className="px-4 py-3">
                         <HealthBadge health={m.health} />
                       </td>
@@ -250,15 +234,13 @@ export default function MonitorsPage() {
                       <td className="px-4 py-3">
                         <Badge tone="muted">{monitorTypeLabel(m.type)}</Badge>
                       </td>
-                      <td className="px-4 py-3 text-muted">
-                        {formatInterval(m.intervalSeconds)}
+                      <td className="hidden px-4 py-3 lg:table-cell">
+                        <HeartbeatStrip checks={m.recentChecks} className="w-32" />
                       </td>
                       <td className="px-4 py-3 text-muted">
                         {formatRelativeTime(m.lastCheckedAt)}
                       </td>
-                      <td className="px-4 py-3 text-muted">
-                        {formatResponseMs(m.lastResponseMs)}
-                      </td>
+                      <td className="px-4 py-3 text-muted">{formatResponseMs(m.lastResponseMs)}</td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1.5">
                           <ButtonLink
@@ -284,9 +266,7 @@ export default function MonitorsPage() {
                                 size="sm"
                                 onClick={() => onToggle(m)}
                                 aria-label={
-                                  m.state === "PAUSED"
-                                    ? `Resume ${m.name}`
-                                    : `Pause ${m.name}`
+                                  m.state === "PAUSED" ? `Resume ${m.name}` : `Pause ${m.name}`
                                 }
                               >
                                 {m.state === "PAUSED" ? (
@@ -371,8 +351,8 @@ function EmptyState({ canManage }: { canManage: boolean }) {
       <div>
         <p className="text-sm font-medium text-text">No monitors yet</p>
         <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-muted">
-          Create your first monitor to start tracking uptime, latency, and
-          incidents across your endpoints.
+          Create your first monitor to start tracking uptime, latency, and incidents across your
+          endpoints.
         </p>
       </div>
       {canManage ? (

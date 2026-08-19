@@ -1,13 +1,16 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { Copy, KeyRound, ShieldCheck, ShieldOff } from "lucide-react";
+import { Copy, KeyRound, QrCode as QrIcon, ShieldCheck, ShieldOff } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordInput } from "@/components/ui/password-input";
+import { QRCode } from "@/components/ui/qr-code";
+import { useToast } from "@/components/ui/toast";
 import { authClient, useSession } from "@/lib/auth-client";
 import { ActiveSessions } from "@/components/settings/active-sessions";
 
@@ -15,6 +18,7 @@ type Stage = "idle" | "enabling" | "verifying" | "disabling";
 
 export default function SecurityPage() {
   const { data: session, isPending, refetch } = useSession();
+  const { toast } = useToast();
 
   const [stage, setStage] = useState<Stage>("idle");
   const [password, setPassword] = useState("");
@@ -22,7 +26,6 @@ export default function SecurityPage() {
   const [totpUri, setTotpUri] = useState<string | null>(null);
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
   const twoFactorEnabled = session?.user.twoFactorEnabled ?? false;
@@ -35,15 +38,14 @@ export default function SecurityPage() {
     }
   }
 
-  async function copy(value: string) {
+  async function copy(value: string, label = "Copied to clipboard.") {
     await navigator.clipboard.writeText(value);
-    setNotice("Copied to clipboard.");
+    toast(label, "success");
   }
 
   async function beginEnable(event: FormEvent) {
     event.preventDefault();
     setError(null);
-    setNotice(null);
     setPending(true);
 
     const { data, error: enableError } = await authClient.twoFactor.enable({
@@ -80,7 +82,7 @@ export default function SecurityPage() {
     setStage("idle");
     setCode("");
     setTotpUri(null);
-    setNotice("Two-factor authentication is now enabled.");
+    toast("Two-factor authentication is now enabled.", "success");
     await refetch?.();
   }
 
@@ -101,7 +103,7 @@ export default function SecurityPage() {
 
     setStage("idle");
     setPassword("");
-    setNotice("Two-factor authentication disabled.");
+    toast("Two-factor authentication disabled.", "info");
     await refetch?.();
   }
 
@@ -121,7 +123,6 @@ export default function SecurityPage() {
       </div>
 
       {error ? <Alert tone="error">{error}</Alert> : null}
-      {notice ? <Alert tone="success">{notice}</Alert> : null}
 
       <Card>
         <div className="flex items-center justify-between border-b border-line-soft p-5">
@@ -157,9 +158,9 @@ export default function SecurityPage() {
           {!twoFactorEnabled && stage === "idle" ? (
             <>
               <p className="text-sm text-muted">
-                Use any TOTP authenticator (1Password, Authy, Google
-                Authenticator). You&apos;ll confirm your password, scan or paste
-                the secret, then verify a code.
+                Use any TOTP authenticator (1Password, Apple Keychain, Google
+                Authenticator, Authy). You&apos;ll confirm your password, scan the
+                QR code, then verify a 6-digit code.
               </p>
               <Button onClick={() => setStage("enabling")}>
                 <KeyRound className="size-4" />
@@ -173,9 +174,9 @@ export default function SecurityPage() {
             <form onSubmit={beginEnable} className="max-w-sm space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="enable-password">Confirm your password</Label>
-                <Input
+                <PasswordInput
                   id="enable-password"
-                  type="password"
+                  name="password"
                   autoComplete="current-password"
                   required
                   value={password}
@@ -200,39 +201,41 @@ export default function SecurityPage() {
             </form>
           ) : null}
 
-          {/* --- Step 2: show secret + backup codes, verify --- */}
+          {/* --- Step 2: show QR code + secret + backup codes, verify --- */}
           {stage === "verifying" && totpUri ? (
-            <div className="space-y-5">
-              <div className="space-y-2">
-                <Label>Add this secret to your authenticator</Label>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 truncate rounded-md border border-line bg-panel-2 px-3 py-2 font-[family-name:var(--font-mono)] text-xs text-text">
-                    {secretFromUri(totpUri) ?? totpUri}
-                  </code>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => copy(secretFromUri(totpUri) ?? totpUri)}
-                  >
-                    <Copy className="size-3.5" />
-                  </Button>
+            <div className="space-y-6">
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+                <div className="flex flex-col items-center gap-2">
+                  <QRCode value={totpUri} size={170} />
+                  <span className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted">
+                    <QrIcon className="size-3" /> Scan with app
+                  </span>
                 </div>
-                <p className="text-xs text-muted">
-                  Or paste the full setup URI:
-                </p>
-                <button
-                  type="button"
-                  onClick={() => copy(totpUri)}
-                  className="block w-full truncate rounded-md border border-line-soft bg-panel-2 px-3 py-2 text-left font-[family-name:var(--font-mono)] text-[11px] text-muted hover:text-text"
-                  title="Click to copy"
-                >
-                  {totpUri}
-                </button>
+
+                <div className="min-w-0 flex-1 space-y-3">
+                  <Label>Or enter secret key manually</Label>
+                  <div className="flex items-center gap-2">
+                    <code className="min-w-0 flex-1 truncate rounded-md border border-line bg-panel-2 px-3 py-2 font-[family-name:var(--font-mono)] text-xs text-text">
+                      {secretFromUri(totpUri) ?? totpUri}
+                    </code>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => copy(secretFromUri(totpUri) ?? totpUri, "Secret key copied.")}
+                      aria-label="Copy secret key"
+                    >
+                      <Copy className="size-3.5" />
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted">
+                    Compatible with Google Authenticator, 1Password, Bitwarden, Apple Passwords, or Authy.
+                  </p>
+                </div>
               </div>
 
               {backupCodes.length > 0 ? (
-                <div className="space-y-2">
+                <div className="space-y-2 border-t border-line-soft pt-4">
                   <Label>Backup codes — store these now</Label>
                   <div className="grid grid-cols-2 gap-2 rounded-md border border-line-soft bg-panel-2 p-3 font-[family-name:var(--font-mono)] text-xs">
                     {backupCodes.map((bc) => (
@@ -245,23 +248,23 @@ export default function SecurityPage() {
                     type="button"
                     variant="secondary"
                     size="sm"
-                    onClick={() => copy(backupCodes.join("\n"))}
+                    onClick={() => copy(backupCodes.join("\n"), "All backup codes copied.")}
                   >
                     <Copy className="size-3.5" />
                     Copy all codes
                   </Button>
                   <p className="text-xs text-muted">
-                    Each code works once if you lose your authenticator. They
-                    won&apos;t be shown again.
+                    Each code works once if you lose access to your authenticator. They won&apos;t be shown again.
                   </p>
                 </div>
               ) : null}
 
-              <form onSubmit={confirmEnable} className="max-w-xs space-y-3">
+              <form onSubmit={confirmEnable} className="max-w-xs space-y-3 border-t border-line-soft pt-4">
                 <div className="space-y-2">
-                  <Label htmlFor="verify-code">Enter a code to confirm</Label>
+                  <Label htmlFor="verify-code">Enter the 6-digit code</Label>
                   <Input
                     id="verify-code"
+                    name="code"
                     inputMode="numeric"
                     autoComplete="one-time-code"
                     required
@@ -285,9 +288,9 @@ export default function SecurityPage() {
                 <Label htmlFor="disable-password">
                   Confirm your password to disable
                 </Label>
-                <Input
+                <PasswordInput
                   id="disable-password"
-                  type="password"
+                  name="password"
                   autoComplete="current-password"
                   required
                   value={password}
