@@ -12,6 +12,7 @@ import type {
 import { buildPage, type Page } from "@backend-uptime/shared";
 import { afterCursorDesc, parseCursor } from "./cursor.js";
 import type { AuditLogService } from "./audit-log.service.js";
+import type { PlanLimitsService } from "./plan-limits.service.js";
 
 // ───────────────────────────── Public view types ────────────────────────────
 
@@ -515,8 +516,10 @@ export function createStatusPageService(deps: {
   notifier?: StatusNotifier;
   /** Public web origin used to build confirm/status links. */
   webUrl?: string;
+  /** Plan gate for creation; same service the monitor limit already uses. */
+  planLimits: PlanLimitsService;
 }): StatusPageService {
-  const { prisma, auditLogs, notifier } = deps;
+  const { prisma, auditLogs, notifier, planLimits } = deps;
   const webUrl = (deps.webUrl ?? "http://localhost:3000").replace(/\/$/, "");
 
   async function audit(event: Parameters<AuditLogService["log"]>[0]): Promise<void> {
@@ -593,6 +596,9 @@ export function createStatusPageService(deps: {
     },
 
     async create(organizationId, input, actor) {
+      // Plan gate — reject before touching the DB, so nothing is half-created.
+      await planLimits.assertWithinLimit(organizationId, "statusPage");
+
       const row = await prisma.statusPage.create({
         data: {
           organizationId,

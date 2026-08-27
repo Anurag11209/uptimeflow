@@ -11,6 +11,7 @@ import type { SessionData } from "./context.js";
 import { createApiRateLimiter } from "./middleware/rate-limit.js";
 import { createServer } from "./server.js";
 import { createAuditLogService } from "./services/audit-log.service.js";
+import { createPlanLimitsService } from "./services/plan-limits.service.js";
 import { createStatusNotifier } from "./services/status-notifier.js";
 import { createMetrics, type Logger } from "./telemetry.js";
 
@@ -36,6 +37,11 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
   });
 
   const auditLogs = createAuditLogService({ prisma, logger });
+
+  // Built here rather than inside createServer because Better Auth needs it
+  // too: seat limits are enforced in its organization hooks, and it is
+  // constructed first. The same instance is handed to both.
+  const planLimits = createPlanLimitsService({ prisma });
 
   // Status-page subscriber emails go through the shared email queue (worker
   // delivers via SES with the existing retry policy).
@@ -69,6 +75,14 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
         ? { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }
         : undefined,
     auditLog: (event) => auditLogs.log(event),
+    // Membership only grows through Better Auth's organization endpoints, so
+    // the plan's seat cap has to be enforced from inside them.
+    seatLimits: {
+      assertSeatAvailable: (organizationId) =>
+        planLimits.assertWithinLimit(organizationId, "seat"),
+      assertSeatAvailableForInvite: (organizationId) =>
+        planLimits.assertSeatAvailableForInvite(organizationId),
+    },
     enableOpenApiReference: env.enableOpenApiReference,
   });
 
@@ -93,6 +107,7 @@ export async function bootstrap(env: Env, logger: Logger): Promise<RunningApi> {
     integrationDispatcher,
     billingProvider,
     statusNotifier,
+    services: { planLimits },
   });
 
   const server = http.createServer(app);
