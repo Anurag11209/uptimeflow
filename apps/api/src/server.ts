@@ -171,6 +171,7 @@ export function createServer(deps: ServerDeps): Express {
         auditLogs,
         webUrl: deps.env.WEB_URL,
         notifier: deps.statusNotifier,
+        planLimits,
       }),
     maintenanceWindows:
       deps.services?.maintenanceWindows ??

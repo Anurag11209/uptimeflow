@@ -78,6 +78,11 @@ export interface PlanLimitsService {
   assertWithinLimit(organizationId: string, resource: LimitedResource): Promise<void>;
   /** Throw payment_required (402) if the plan does not include `capability`. */
   assertCapability(organizationId: string, capability: Capability): Promise<void>;
+  /**
+   * Throw payment_required (402) if issuing one more invitation would commit
+   * the org past its seat cap. Outstanding invitations count as taken seats.
+   */
+  assertSeatAvailableForInvite(organizationId: string): Promise<void>;
 }
 
 export function createPlanLimitsService(deps: { prisma: PrismaClient }): PlanLimitsService {
@@ -122,6 +127,16 @@ export function createPlanLimitsService(deps: { prisma: PrismaClient }): PlanLim
     }
   }
 
+  /**
+   * Pending, unexpired invitations hold a seat. Same predicate the org overview
+   * already uses, so "5 members, 2 invited" reads the same in both places.
+   */
+  async function countPendingInvitations(organizationId: string): Promise<number> {
+    return prisma.invitation.count({
+      where: { organizationId, status: "pending", expiresAt: { gt: new Date() } },
+    });
+  }
+
   function limitFor(limits: EffectiveLimits, resource: LimitedResource): number | null {
     switch (resource) {
       case "monitor":
@@ -143,6 +158,44 @@ export function createPlanLimitsService(deps: { prisma: PrismaClient }): PlanLim
         `Your ${limits.planName} plan allows ${limit} ${RESOURCE_LABEL[resource]}. ` +
           `Upgrade your plan to add more.`,
         { resource, limit, used, tier: limits.tier },
+      );
+    }
+  }
+
+  /**
+   * Seat gate for the invite path. Counting outstanding invitations as taken
+   * seats is what keeps membership growth safe under concurrency: this is the
+   * ONLY operation that raises `members + pendingInvitations`, and accepting
+   * an invitation merely converts a pending seat into a member seat, leaving
+   * that sum unchanged. So however many invitations are redeemed at once, they
+   * can only fill capacity that was already claimed one invite at a time.
+   *
+   * The residual window is on invite creation itself: this check and Better
+   * Auth's insert are not one transaction, so two invites racing for a single
+   * remaining seat can both pass. Closing that needs either a reserved-seat
+   * column with a DB constraint or a wrapper around Better Auth's adapter —
+   * both a larger change than this branch is scoped for.
+   */
+  async function assertSeatAvailableForInvite(organizationId: string): Promise<void> {
+    const limits = await getEffectiveLimits(organizationId);
+    if (limits.seatLimit === null) return; // unlimited
+    const [members, pending] = await Promise.all([
+      countUsage(organizationId, "seat"),
+      countPendingInvitations(organizationId),
+    ]);
+    const committed = members + pending;
+    if (committed >= limits.seatLimit) {
+      throw AppError.paymentRequired(
+        `Your ${limits.planName} plan allows ${limits.seatLimit} ${RESOURCE_LABEL.seat} ` +
+          `(${members} in use, ${pending} invited). Upgrade your plan to add more.`,
+        {
+          resource: "seat",
+          limit: limits.seatLimit,
+          used: committed,
+          members,
+          pendingInvitations: pending,
+          tier: limits.tier,
+        },
       );
     }
   }
@@ -212,7 +265,14 @@ export function createPlanLimitsService(deps: { prisma: PrismaClient }): PlanLim
     };
   }
 
-  return { getEffectiveLimits, getSummary, countUsage, assertWithinLimit, assertCapability };
+  return {
+    getEffectiveLimits,
+    getSummary,
+    countUsage,
+    assertWithinLimit,
+    assertCapability,
+    assertSeatAvailableForInvite,
+  };
 }
 
 /** First instant of the current UTC month — the metering period anchor. */

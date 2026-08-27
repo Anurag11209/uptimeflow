@@ -6,8 +6,10 @@ import { enqueueEmail, type EmailQueue } from "@backend-uptime/notifications";
 import type { AuditEvent } from "@backend-uptime/shared";
 import type { Redis } from "ioredis";
 import { ac, orgAccessRoles } from "./permissions.js";
+import { createSeatEnforcementHooks, type SeatLimitGate } from "./seat-limits.js";
 
 export { ac, orgAccessRoles } from "./permissions.js";
+export { createSeatEnforcementHooks, enforceSeat, type SeatLimitGate } from "./seat-limits.js";
 
 export interface OAuthProviderCredentials {
   clientId: string;
@@ -29,6 +31,17 @@ export interface CreateAuthOptions {
   google?: OAuthProviderCredentials;
   /** Audit sink injected by the API service; failures must never block auth. */
   auditLog?: (event: AuditEvent) => Promise<void>;
+  /**
+   * Seat gate injected by the API service. Membership only ever grows through
+   * Better Auth's organization endpoints, so the plan's seat limit has to be
+   * enforced here — but the plan catalog lives in the API. Injecting the two
+   * assertions keeps this package free of a dependency on the API, the same
+   * way `auditLog` is injected rather than imported.
+   *
+   * Both reject with `AppError("payment_required")`, which is translated into
+   * a Better Auth 402. Absent = no seat enforcement (tests, local dev).
+   */
+  seatLimits?: SeatLimitGate;
   /** Expose the generated OpenAPI reference at /api/auth/reference. */
   enableOpenApiReference?: boolean;
 }
@@ -184,7 +197,20 @@ export function createAuth(options: CreateAuthOptions) {
         roles: orgAccessRoles,
         creatorRole: "owner",
         invitationExpiresIn: 7 * DAY,
+        // Absolute ceiling for any org, independent of plan. The per-plan seat
+        // limit is enforced by organizationHooks below.
         membershipLimit: 200,
+        /**
+         * Plan seat enforcement. Every path that can grow an organization runs
+         * through one of these three hooks — there is no other way in, since
+         * the API exposes no membership mutations of its own.
+         *
+         * Invitations are gated against members + outstanding invitations, so
+         * an org can never hold more claims than it has seats. Accepting then
+         * only converts a claim it already holds, which is what makes
+         * concurrent accepts safe (see assertSeatAvailableForInvite).
+         */
+        organizationHooks: createSeatEnforcementHooks(options.seatLimits),
         sendInvitationEmail: async (data) => {
           const acceptUrl = `${options.webUrl}/accept-invitation/${data.id}`;
           await enqueueEmail(options.emailQueue, {
