@@ -10,6 +10,7 @@ import {
   isAllOperational,
   overallHeadline,
   safeAccent,
+  safeJsonLd,
   uptimeTone,
   type PublicStatusComponent,
   type PublicStatusIncident,
@@ -95,7 +96,9 @@ export default async function StatusPage({ params }: PageProps) {
     <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:py-14" style={accentStyle}>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        // `page.name`/`page.description` are tenant-controlled; safeJsonLd
+        // escapes `<` so they cannot close this tag. See lib/status.ts.
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
       />
       <Hero page={page} overallUptime={history?.overallUptimePct ?? null} />
       <div className="mt-8 flex flex-col gap-8">

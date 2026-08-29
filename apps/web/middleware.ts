@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { buildCsp } from "@/lib/csp";
 import { isCustomHostCandidate, parseAppHosts } from "@/lib/custom-host";
 
 /**
@@ -15,9 +16,34 @@ const SESSION_COOKIES = [
 const APP_HOSTS = parseAppHosts(process.env.NEXT_PUBLIC_APP_HOSTNAMES);
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
+/** Fresh 128-bit nonce per request; Web Crypto, so it works on the Edge runtime. */
+function makeNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes));
+}
+
 export async function middleware(request: NextRequest) {
   const host = request.headers.get("host") ?? "";
   const { pathname } = request.nextUrl;
+
+  // ── CSP ────────────────────────────────────────────────────────────────
+  // Every response leaves here with a nonce-based policy. The nonce also goes
+  // out on the REQUEST headers: Next reads the CSP there and stamps the same
+  // nonce onto the framework's own inline scripts, which is what lets
+  // script-src drop 'unsafe-inline' without breaking hydration.
+  const nonce = makeNonce();
+  const csp = buildCsp(nonce, {
+    apiOrigin: API_BASE,
+    isProduction: process.env.NODE_ENV === "production",
+  });
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nonce", nonce);
+  requestHeaders.set("Content-Security-Policy", csp);
+  const withCsp = <T extends NextResponse>(response: T): T => {
+    response.headers.set("Content-Security-Policy", csp);
+    return response;
+  };
 
   // ── Custom-domain serving ──────────────────────────────────────────────
   // A verified customer domain (status.acme.com) renders its status page. We
@@ -34,23 +60,23 @@ export async function middleware(request: NextRequest) {
         const { slug } = (await res.json()) as { slug: string };
         const url = request.nextUrl.clone();
         url.pathname = `/status/${slug}`;
-        return NextResponse.rewrite(url);
+        return withCsp(NextResponse.rewrite(url, { request: { headers: requestHeaders } }));
       }
     } catch {
       // Resolver unreachable — fall through to 404 rather than leak the app.
     }
-    return new NextResponse("Not found", { status: 404 });
+    return withCsp(new NextResponse("Not found", { status: 404 }));
   }
 
   // ── Dashboard guard (unchanged) ────────────────────────────────────────
   if (pathname.startsWith("/dashboard")) {
     const hasSession = SESSION_COOKIES.some((name) => request.cookies.has(name));
     if (!hasSession) {
-      return NextResponse.redirect(new URL("/sign-in", request.url));
+      return withCsp(NextResponse.redirect(new URL("/sign-in", request.url)));
     }
   }
 
-  return NextResponse.next();
+  return withCsp(NextResponse.next({ request: { headers: requestHeaders } }));
 }
 
 export const config = {

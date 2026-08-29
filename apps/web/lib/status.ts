@@ -68,6 +68,30 @@ export function safeAccent(accent: string | null | undefined): string | null {
   return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(accent) ? accent : null;
 }
 
+/**
+ * Serialize a value for embedding inside `<script type="application/ld+json">`.
+ *
+ * `JSON.stringify` escapes quotes and backslashes but NOT `<`, so a status page
+ * named `</script><script>…` closes the tag and executes — stored XSS on a
+ * public page that shares an origin with the dashboard. HTML parses the raw
+ * bytes of a script element before any JSON parser sees them, so the escaping
+ * has to happen here, at serialization.
+ *
+ * Every replacement stays valid JSON: `<`, `>` and `&` can only occur inside
+ * string values in `JSON.stringify` output (structural characters are
+ * `{}[]",:` and numbers), and `\uXXXX` is a legal JSON string escape, so the
+ * parsed value is byte-for-byte identical. U+2028/U+2029 are escaped too —
+ * legal in JSON strings but raw line terminators to a JavaScript parser.
+ */
+export function safeJsonLd(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 export interface StatusHistoryDay {
   day: string;
   uptimePct: number | null;
